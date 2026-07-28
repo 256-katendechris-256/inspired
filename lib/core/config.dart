@@ -1,14 +1,13 @@
 /// Build-time configuration injected via --dart-define.
 ///
-/// Default backendUrl is the dev PC's LAN IP — verified reachable directly from
-/// the physical phone, so it needs no fragile `adb reverse` tunnel. Override if
-/// the PC's IP changes or you switch targets:
+/// Default backendUrl is the live Railway deployment. Override for local dev:
+///   - Same-WiFi LAN (dev PC IP): --dart-define=BACKEND_URL=http://192.168.1.176:8000
 ///   - Android emulator:          --dart-define=BACKEND_URL=http://10.0.2.2:8000
 ///   - adb reverse tunnel / USB:  --dart-define=BACKEND_URL=http://localhost:8000
 class Config {
   static const String backendUrl = String.fromEnvironment(
     'BACKEND_URL',
-    defaultValue: 'http://192.168.1.176:8000',
+    defaultValue: 'https://web-production-2496d.up.railway.app',
   );
 
   static const String googleServerClientId = String.fromEnvironment(
