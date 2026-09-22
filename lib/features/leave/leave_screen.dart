@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 
 import '../../core/api/api_client.dart';
 import '../../core/brand.dart';
+import '../../core/working_days.dart';
 
 /// A kind of leave this employee may ask for, as configured by HR. The
 /// server has already applied the gender rule (a man never sees maternity
@@ -111,6 +112,9 @@ class _LeaveScreenState extends ConsumerState<LeaveScreen> {
   bool _loadingList = true;
   List<LeaveRequestItem> _items = [];
   List<LeaveTypeOption> _types = [];
+  /// Gazetted holidays, so the day count on the form matches the one the
+  /// server will store. Empty is safe — the count is then Mon–Sat only.
+  Set<String> _holidays = {};
 
   bool _formOpen = false;
   String _leaveType = 'annual';
@@ -139,6 +143,7 @@ class _LeaveScreenState extends ConsumerState<LeaveScreen> {
       final results = await Future.wait([
         dio.get('/api/leave/requests'),
         dio.get('/api/leave/types'),
+        dio.get('/api/leave/holidays'),
       ]);
       final rows = (results[0].data['requests'] as List)
           .map((e) => LeaveRequestItem.fromJson(Map<String, dynamic>.from(e)))
@@ -149,9 +154,14 @@ class _LeaveScreenState extends ConsumerState<LeaveScreen> {
           .map((e) => LeaveTypeOption.fromJson(Map<String, dynamic>.from(e)))
           .where((t) => t.allowed)
           .toList();
+      final holidays = {
+        for (final h in (results[2].data['holidays'] as List? ?? const []))
+          (h as Map)['date'] as String,
+      };
       setState(() {
         _items = rows;
         _types = types;
+        _holidays = holidays;
         if (types.isNotEmpty && !types.any((t) => t.code == _leaveType)) {
           _leaveType = types.first.code;
         }
@@ -187,6 +197,16 @@ class _LeaveScreenState extends ConsumerState<LeaveScreen> {
     }
     return null;
   }
+
+  /// Working days the picked range will cost, or null until both dates are in.
+  int? get _days => _start == null || _end == null
+      ? null
+      : countWorkingDays(_start!, _end!, _holidays);
+
+  /// Days away including Sundays and holidays — what they'll actually miss.
+  int? get _calendarDays => _start == null || _end == null
+      ? null
+      : countCalendarDays(_start!, _end!);
 
   Future<void> _submit() async {
     if (_start == null || _end == null) {
@@ -295,21 +315,43 @@ class _LeaveScreenState extends ConsumerState<LeaveScreen> {
             style: TextStyle(fontWeight: FontWeight.w700, color: Brand.ink),
           ),
           const SizedBox(height: 14),
-          DropdownButtonFormField<String>(
-            initialValue: _types.any((t) => t.code == _leaveType)
-                ? _leaveType
-                : null,
-            decoration: const InputDecoration(labelText: 'Type of leave'),
-            items: _types
-                .map(
-                  (t) => DropdownMenuItem(value: t.code, child: Text(t.name)),
-                )
-                .toList(),
-            onChanged: (v) => setState(() => _leaveType = v ?? _leaveType),
+          // What they're asking for and what it costs, side by side — the two
+          // things they're actually deciding between.
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  initialValue: _types.any((t) => t.code == _leaveType)
+                      ? _leaveType
+                      : null,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Type of leave',
+                  ),
+                  items: _types
+                      .map(
+                        (t) => DropdownMenuItem(
+                          value: t.code,
+                          child: Text(t.name, overflow: TextOverflow.ellipsis),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (v) =>
+                      setState(() => _leaveType = v ?? _leaveType),
+                ),
+              ),
+              const SizedBox(width: 12),
+              _DaysBadge(days: _days),
+            ],
           ),
           if (_selectedType != null) ...[
-            const SizedBox(height: 8),
-            _TypeExplainer(type: _selectedType!),
+            const SizedBox(height: 10),
+            _TypeExplainer(
+              type: _selectedType!,
+              days: _days,
+              calendarDays: _calendarDays,
+            ),
           ],
           const SizedBox(height: 12),
           Row(
@@ -408,47 +450,154 @@ class _LeaveScreenState extends ConsumerState<LeaveScreen> {
   }
 }
 
-/// What this kind of leave is for and where the employee stands on it —
-/// the plain-language note the paper form never had room for.
-class _TypeExplainer extends StatelessWidget {
-  const _TypeExplainer({required this.type});
-  final LeaveTypeOption type;
+/// The cost of the request, sat beside the type it applies to. Blank until
+/// both dates are picked, so it never shows a confident "0".
+class _DaysBadge extends StatelessWidget {
+  const _DaysBadge({required this.days});
+  final int? days;
 
   @override
   Widget build(BuildContext context) {
+    final known = days != null;
+    return Container(
+      width: 84,
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      decoration: BoxDecoration(
+        color: known ? Brand.greenWash : Brand.surfaceAlt,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: known ? Brand.green.withValues(alpha: 0.3) : Brand.line),
+      ),
+      child: Column(
+        children: [
+          Text(
+            known ? '${days!}' : '—',
+            style: TextStyle(
+              fontSize: 24,
+              height: 1.05,
+              fontWeight: FontWeight.w700,
+              color: known ? Brand.green : Brand.mute,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            known && days == 1 ? 'working day' : 'working days',
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 9.5, color: Brand.slate, height: 1.1),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// What this kind of leave is for, what the picked dates will cost, and where
+/// the employee stands on their entitlement — the plain-language note the
+/// paper form never had room for.
+/// What this kind of leave is for, what the picked dates will cost, and where
+/// the employee stands on their entitlement — the plain-language note the
+/// paper form never had room for.
+class _TypeExplainer extends StatelessWidget {
+  const _TypeExplainer({
+    required this.type,
+    required this.days,
+    required this.calendarDays,
+  });
+  final LeaveTypeOption type;
+  final int? days;
+  final int? calendarDays;
+
+  /// Spelled out only when it differs from the working-day count, so we don't
+  /// state the obvious for a range with no Sunday or holiday in it.
+  String? get _spanNote {
+    if (days == null || calendarDays == null) return null;
+    if (calendarDays == days) return null;
+    final rest = calendarDays! - days!;
+    return 'Away $calendarDays days in all — $rest '
+        '${rest == 1 ? 'is a rest day or holiday' : 'are rest days or holidays'}, '
+        'which you are not charged for.';
+  }
+
+  /// Warns before they submit something their balance cannot cover.
+  String? get _overdraw {
+    if (days == null || type.remaining == null) return null;
+    if (days! <= type.remaining!) return null;
+    final over = days! - type.remaining!;
+    return 'That is $over day${over == 1 ? '' : 's'} more than you have left. '
+        'HR has to decide whether to allow it.';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final span = _spanNote;
+    final over = _overdraw;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Brand.green.withValues(alpha: 0.07),
+        color: Brand.surfaceAlt,
         borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Brand.line),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (type.description.isNotEmpty)
+          if (type.description.isNotEmpty) ...[
             Text(
               type.description,
-              style: const TextStyle(color: Brand.ink, fontSize: 12.5, height: 1.35),
-            ),
-          if (type.description.isNotEmpty) const SizedBox(height: 6),
-          Row(
-            children: [
-              const Icon(Icons.event_available_outlined, size: 15, color: Brand.green),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  type.balanceLine,
-                  style: const TextStyle(
-                    color: Brand.green,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+              style: const TextStyle(
+                color: Brand.ink,
+                fontSize: 12.5,
+                height: 1.4,
               ),
-            ],
+            ),
+            const SizedBox(height: 8),
+          ],
+          _Line(
+            icon: Icons.account_balance_wallet_outlined,
+            text: type.balanceLine,
+            color: Brand.slate,
           ),
+          if (span != null) ...[
+            const SizedBox(height: 6),
+            _Line(
+              icon: Icons.event_busy_outlined,
+              text: span,
+              color: Brand.slate,
+            ),
+          ],
+          if (over != null) ...[
+            const SizedBox(height: 6),
+            _Line(
+              icon: Icons.warning_amber_rounded,
+              text: over,
+              color: Brand.orange,
+            ),
+          ],
         ],
       ),
+    );
+  }
+}
+
+class _Line extends StatelessWidget {
+  const _Line({required this.icon, required this.text, required this.color});
+  final IconData icon;
+  final String text;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 14, color: color),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(color: color, fontSize: 11.5, height: 1.35),
+          ),
+        ),
+      ],
     );
   }
 }
