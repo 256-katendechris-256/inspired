@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/brand.dart';
+import '../../notifications/inbox_data.dart';
 import '../../attendance/sites.dart';
 import '../../auth/auth_controller.dart';
 
@@ -97,12 +98,13 @@ class AppHeader extends ConsumerWidget {
   }
 }
 
-class _BellButton extends StatelessWidget {
+class _BellButton extends ConsumerWidget {
   const _BellButton({required this.onTap});
   final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final unread = ref.watch(inboxProvider).value?.unread ?? 0;
     return Stack(
       alignment: Alignment.center,
       children: [
@@ -111,19 +113,20 @@ class _BellButton extends StatelessWidget {
           icon: const Icon(Icons.notifications_outlined, color: Colors.white),
           tooltip: 'Notifications',
         ),
-        Positioned(
-          top: 10,
-          right: 10,
-          child: Container(
-            width: 9,
-            height: 9,
-            decoration: BoxDecoration(
-              color: Brand.orange,
-              shape: BoxShape.circle,
-              border: Border.all(color: Brand.green, width: 1.5),
+        if (unread > 0)
+          Positioned(
+            top: 10,
+            right: 10,
+            child: Container(
+              width: 9,
+              height: 9,
+              decoration: BoxDecoration(
+                color: Brand.orange,
+                shape: BoxShape.circle,
+                border: Border.all(color: Brand.green, width: 1.5),
+              ),
             ),
           ),
-        ),
       ],
     );
   }

@@ -452,10 +452,10 @@ jobs:
 
 These are non-negotiable design constraints — bake into every module.
 
-1. **Location captured only at explicit user action.** Flutter app requests "while using app" location permission only (never background). GPS + WiFi BSSID are read at the moment the employee taps Check In or Check Out. No periodic/silent location queries.
-2. **No admin UI exposes device data.** FCM tokens exist in DB to deliver push notifications. No `/admin/devices` page, no "last seen" displays, no "force re-auth from device" admin action. The original `devices-page.tsx` in the dashboard prototype is removed, not repurposed.
+1. **Location and device data captured only at explicit user action.** Flutter app requests "while using app" location permission only (never background). GPS + WiFi BSSID + the hardware device id are read at the moment the employee taps Check In or Check Out, and never otherwise. No periodic/silent location or device queries.
+2. **No admin UI exposes device data as a lookup/browsing feature.** FCM tokens exist in DB to deliver push notifications. No `/admin/devices` page, no "last seen" displays, no "force re-auth from device" admin action. The original `devices-page.tsx` in the dashboard prototype is removed, not repurposed. Exception, narrowly scoped: `AttendanceRecord.device_hash` (a sha256 of the device id — the raw id is never stored) powers `DeviceShareAlert`, a fraud-integrity check for one device being used to check in/out for more than one employee on the same day. This is a security/integrity event per rule 6 below, not a device directory — the admin UI only ever shows an alert once the cross-employee condition fires, and only the employees + date involved, never a raw device id or a per-employee "which device" view.
 3. **Employee can audit their own attendance.** Mobile app has an "Attendance history" screen showing every record made about them — transparency principle.
-4. **First-launch privacy notice in Flutter app**: explicit text that the app records location + WiFi only at check-in/out moments, not otherwise.
+4. **First-launch privacy notice in Flutter app**: explicit text that the app records location, WiFi, and a device identifier only at check-in/out moments, not otherwise. *(Not yet built — pre-existing gap, tracked separately from the device-sharing alert feature.)*
 5. **Retention policy on attendance records.** Default 24 months active, then archive/delete. HR-configurable. Terminated employees: compliance period then purge.
 6. **Audit log is for security events only** (logins, permission changes, data exports), never for surveillance of normal employee activity.
 

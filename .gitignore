@@ -43,3 +43,17 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Release signing — never commit the keystore or its credentials. Losing
+# this file means every future update permanently forces a full
+# uninstall/reinstall for all users (wipes local data, incl. login
+# sessions) since Android can no longer verify it's "the same app" —
+# back it up outside this machine/repo, not just gitignore it here.
+/android/app/upload-keystore.jks
+/android/key.properties
+
+# Firebase app config. Not committed here: this repo is public, and the file
+# carries a shared API key plus other apps' config from the same Firebase
+# project. Download your own from the Firebase console (Project settings ->
+# your Android app) into android/app/ before building.
+/android/app/google-services.json

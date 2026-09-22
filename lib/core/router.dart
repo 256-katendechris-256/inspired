@@ -7,8 +7,15 @@ import '../features/attendance/attendance_screen.dart';
 import '../features/auth/login_screen.dart';
 import '../features/auth/reset_password_screen.dart';
 import '../features/home/home_screen.dart';
+import '../features/leave/leave_screen.dart';
+import '../features/notifications/notifications_screen.dart';
 import '../features/placeholder/placeholder_screen.dart';
+import '../features/profile/profile_screen.dart';
+import '../features/requests/finance_requisition_screen.dart';
+import '../features/requests/requests_hub_screen.dart';
+import '../features/requests/store_request_screen.dart';
 import '../features/splash/splash_screen.dart';
+import '../features/tasks/tasks_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   return GoRouter(
@@ -21,24 +28,21 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, _) => const ResetPasswordScreen(),
       ),
       GoRoute(path: '/home', builder: (_, _) => const HomeScreen()),
-      GoRoute(path: '/history', builder: (_, _) => const AttendanceScreen()),
       GoRoute(
-        path: '/tasks',
-        builder: (_, _) => const PlaceholderScreen(
-          title: 'Tasks',
-          icon: Icons.checklist_rtl,
-          color: Brand.blue,
-          blurb: 'See and update the work assigned to you by your supervisor.',
-        ),
+        path: '/notifications',
+        builder: (_, _) => const NotificationsScreen(),
+      ),
+      GoRoute(path: '/history', builder: (_, _) => const AttendanceScreen()),
+      GoRoute(path: '/tasks', builder: (_, _) => const TasksScreen()),
+      GoRoute(path: '/requests', builder: (_, _) => const RequestsHubScreen()),
+      GoRoute(path: '/requests/leave', builder: (_, _) => const LeaveScreen()),
+      GoRoute(
+        path: '/requests/store',
+        builder: (_, _) => const StoreRequestScreen(),
       ),
       GoRoute(
-        path: '/requests',
-        builder: (_, _) => const PlaceholderScreen(
-          title: 'Requests',
-          icon: Icons.outbox_outlined,
-          color: Brand.orange,
-          blurb: 'Submit leave and other requests, and track their approval.',
-        ),
+        path: '/requests/finance',
+        builder: (_, _) => const FinanceRequisitionScreen(),
       ),
       GoRoute(
         path: '/reports',
@@ -49,15 +53,7 @@ final routerProvider = Provider<GoRouter>((ref) {
           blurb: 'Your attendance hours, site visits and monthly summaries.',
         ),
       ),
-      GoRoute(
-        path: '/profile',
-        builder: (_, _) => const PlaceholderScreen(
-          title: 'Profile',
-          icon: Icons.person_outline,
-          color: Brand.green,
-          blurb: 'Your staff details, department and account settings.',
-        ),
-      ),
+      GoRoute(path: '/profile', builder: (_, _) => const ProfileScreen()),
     ],
   );
 });

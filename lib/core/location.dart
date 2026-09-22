@@ -4,9 +4,11 @@ import 'package:latlong2/latlong.dart';
 
 /// A position reading with its reported horizontal accuracy (metres).
 class PositionFix {
-  const PositionFix(this.latLng, this.accuracyM);
+  const PositionFix(this.latLng, this.accuracyM, {this.isMocked = false});
   final LatLng latLng;
   final double? accuracyM;
+  /// Android reports whether a mock-location provider supplied the fix.
+  final bool isMocked;
 }
 
 /// Best-effort current position with accuracy. Returns null if location is off
@@ -25,7 +27,11 @@ Future<PositionFix?> currentPosition() async {
     final pos = await Geolocator.getCurrentPosition(
       locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
     );
-    return PositionFix(LatLng(pos.latitude, pos.longitude), pos.accuracy);
+    return PositionFix(
+      LatLng(pos.latitude, pos.longitude),
+      pos.accuracy,
+      isMocked: pos.isMocked,
+    );
   } catch (_) {
     return null;
   }

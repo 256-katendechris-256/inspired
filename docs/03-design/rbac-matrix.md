@@ -42,7 +42,7 @@ Actions: **C**reate · **R**ead · **U**pdate · **D**elete · **A**pprove · **
 | **Own profile** | R, U | R, U | R, U | R, U | R, U |
 | **Own attendance** (check-in/out) | C, R | C, R | C, R | C, R | C, R |
 | **Attendance — all** | — | R *(own dept)* | R (org) | R (org) | R (org) |
-| **Attendance — correct / resolve flag** | — | — | U | U | — |
+| **Attendance — correct / resolve flag** | — | U *(own dept)* | U | U | — |
 | **Employees** (roster) | — | R *(own dept)* | C, R, U | C, R, U, D | R |
 | **Employee — assign role** | — | — | — | C/U | — |
 | **Employee — reset password** | — | — | U | U | — |
@@ -51,15 +51,40 @@ Actions: **C**reate · **R**ead · **U**pdate · **D**elete · **A**pprove · **
 | **Audit log** (security events) | — | — | R | R, X | R |
 | **App versions** | — | — | — | C, R, U | — |
 | **Reports / exports** | — | X *(dept)* | X | X | X |
+| **Leave requests** | C, R *(own)* | R, A *(own dept, stage 1)* | R, A *(stage 2)* | R, A | — |
+| **Leave types & public holidays** | R | R | C, R, U, D | C, R, U, D | R |
+| **Store requests** | C, R *(own)* | R, A *(own dept, stage 2)* | — | R, A | — |
+| **Finance requisitions** | C, R *(own)* | R, A *(own dept, stage 1)* | — | R, A | — |
+| **Tasks** | R, U *(assigned to me)* | C, R, U, D *(own dept)* | — | C, R, U, D | — |
+| **Notifications (inbox)** | R, U *(own)* | R, U *(own)* | R, U *(own)* | R, U *(own)* | R, U *(own)* |
 
 Notes:
 - **Only the Admin** creates/edits **geofences** and **assigns roles** — these
   are access-control and infrastructure decisions.
 - **HR and Admin** both onboard employees and reset passwords; only Admin sets a
   user's *role*.
+- **Revised**: HOD may now create/correct attendance records for their own
+  department (was originally read-only) — they're best placed to know their
+  own team actually showed up, and delete stays Admin/HR-only as a guardrail.
 - **Audit log records security events only** (logins, role changes, exports,
   geofence edits) — never normal employee movement.
 - Devices/FCM tokens are **not** an admin-facing resource (no surveillance UI).
+- **Requests are private to the people on the form** (2026-09-18): a leave,
+  store or finance request is visible only to the requester, the HOD of the
+  requester's department, the department it is addressed to (HR for leave,
+  Stores for store requests, Finance for requisitions) and System Admin. Exec
+  does not see request lists; HR does not see store/finance requests. Each
+  party is notified (inbox + push) when a request reaches their stage, and
+  can download the filled-in form as a PDF.
+- **Leave types are data, not code** (`leave.LeaveType`): HR/Admin set the
+  yearly entitlement, description and gender restriction. Defaults: annual 21,
+  sick 14, maternity 60 (women), paternity 4 (men), unpaid/other 0. A type
+  with a gender restriction is hidden from, and rejected for, anyone of the
+  other gender — and for anyone whose `Employee.gender` is still unset.
+- **Sign-in reminders** (08:45 and 09:00) are local alarms scheduled on the
+  phone from `/api/attendance/me/reminder-plan`, so they fire with no signal;
+  the plan skips Sundays, public holidays and approved leave, and today's
+  alarms are cancelled on check-in.
 
 ## 3. Identity & onboarding
 

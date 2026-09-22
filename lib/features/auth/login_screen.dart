@@ -1,9 +1,13 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/brand.dart';
 import 'auth_controller.dart';
+import 'google_web_button_stub.dart'
+    if (dart.library.html) 'google_web_button_web.dart'
+    as google_web;
 
 enum _Step { email, credentials }
 
@@ -23,6 +27,19 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   bool _busy = false;
   bool _obscure = true;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    // Web's Google button drives its own credential flow outside of any
+    // button onPressed here (see google_web_button_web.dart) — this picks
+    // up the result. No-op on mobile.
+    if (kIsWeb) {
+      Future.microtask(
+        () => ref.read(authControllerProvider.notifier).ensureGoogleWebListener(),
+      );
+    }
+  }
 
   @override
   void dispose() {
@@ -60,6 +77,18 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     });
   }
 
+  Future<void> _continueWithGoogle() async {
+    await _run(() async {
+      await ref.read(authControllerProvider.notifier).signInWithGoogle();
+      if (!mounted) return;
+      final status = ref.read(authControllerProvider).status;
+      if (status == AuthStatus.unauthenticated) return; // picker was dismissed
+      context.go(
+        status == AuthStatus.mustResetPassword ? '/reset-password' : '/home',
+      );
+    });
+  }
+
   Future<void> _signIn() async {
     if (_employeeId.text.trim().isEmpty || _password.text.isEmpty) {
       setState(() => _error = 'Enter your employee ID and password.');
@@ -85,6 +114,19 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isEmailStep = _step == _Step.email;
+
+    // Web's rendered Google button signs in outside of _continueWithGoogle's
+    // await chain (see initState), so navigation on success has to react to
+    // the resulting state change instead of following a direct call.
+    // Harmless no-op for the mobile flow, which already navigates itself.
+    ref.listen<AuthState>(authControllerProvider, (previous, next) {
+      if (!kIsWeb) return;
+      if (next.status == AuthStatus.authenticated) {
+        context.go('/home');
+      } else if (next.status == AuthStatus.mustResetPassword) {
+        context.go('/reset-password');
+      }
+    });
 
     return Scaffold(
       body: SafeArea(
@@ -140,6 +182,30 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   }
 
   List<Widget> _emailStep() => [
+    if (kIsWeb)
+      // The real Google-branded button — required for the GIS credential
+      // flow that actually returns an idToken on web (see
+      // google_web_button_web.dart). Its own internal click handler drives
+      // sign-in; nothing here calls _continueWithGoogle.
+      Center(child: google_web.buildGoogleWebButton())
+    else
+      OutlinedButton.icon(
+        onPressed: _busy ? null : _continueWithGoogle,
+        icon: const Icon(Icons.g_mobiledata, size: 26),
+        label: const Text('Continue with Google'),
+      ),
+    const SizedBox(height: 18),
+    Row(
+      children: [
+        Expanded(child: Divider(color: Brand.line)),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          child: Text('or', style: TextStyle(color: Brand.mute, fontSize: 12)),
+        ),
+        Expanded(child: Divider(color: Brand.line)),
+      ],
+    ),
+    const SizedBox(height: 18),
     TextField(
       controller: _email,
       enabled: !_busy,
@@ -155,7 +221,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     const SizedBox(height: 20),
     FilledButton(
       onPressed: _busy ? null : _continueWithEmail,
-      child: _busy ? const _Spinner() : const Text('Continue'),
+      child: _busy ? const _Spinner() : const Text('Continue with employee ID'),
     ),
   ];
 

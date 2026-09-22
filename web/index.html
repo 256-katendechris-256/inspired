@@ -29,6 +29,12 @@
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
+  <!-- Google Sign-In (web): same OAuth client the backend verifies the
+       id_token audience against (GOOGLE_OAUTH_CLIENT_ID). Fallback for the
+       plugin's auto-detection; the Dart-side `clientId` param takes
+       precedence — see auth_controller.dart. -->
+  <meta name="google-signin-client_id" content="165605340230-rvbdvcnsdveelikseiua263li34djqei.apps.googleusercontent.com">
+
   <title>inspired</title>
   <link rel="manifest" href="manifest.json">
 </head>

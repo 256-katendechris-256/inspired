@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/brand.dart';
 import '../../core/location.dart';
@@ -23,12 +24,7 @@ class HomeScreen extends ConsumerWidget {
           Builder(
             builder: (ctx) => AppHeader(
               onMenu: () => Scaffold.of(ctx).openDrawer(),
-              onNotifications: () =>
-                  ScaffoldMessenger.of(ctx)
-                    ..hideCurrentSnackBar()
-                    ..showSnackBar(
-                      const SnackBar(content: Text('No new notifications.')),
-                    ),
+              onNotifications: () => ctx.go('/notifications'),
             ),
           ),
           Expanded(

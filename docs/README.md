@@ -7,7 +7,8 @@ Django backend (`inspired-api`).
 This folder holds the **Software Development Life Cycle (SDLC) documents** — the
 plans, diagrams, and technical analyses that exist *around* the code. The
 governing decisions live in [`SPRINT_0.md`](./SPRINT_0.md); the documents below
-factor those decisions into single-purpose artifacts.
+factor those decisions into single-purpose artifacts. For a one-page tour of
+all three repos and how to set each one up, see [`PLATFORM.md`](./PLATFORM.md).
 
 ## Status legend
 
@@ -59,6 +60,7 @@ factor those decisions into single-purpose artifacts.
 | Doc | Status |
 |---|---|
 | [Supabase Migration Plan](./05-delivery/supabase-migration-plan.md) | 🟡 |
+| [ERP Integration Plan](./05-delivery/erp-integration-plan.md) | 🟡 |
 | [Test Plan & Strategy](./05-delivery/test-plan.md) | 📄 |
 | [CI/CD & Deployment Design](./05-delivery/cicd-deployment.md) | 📄 |
 | [Release Management & Versioning](./05-delivery/release-management.md) | 📄 |

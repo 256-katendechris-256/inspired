@@ -12,7 +12,19 @@ class Config {
 
   static const String googleServerClientId = String.fromEnvironment(
     'GOOGLE_SERVER_CLIENT_ID',
-    defaultValue: '',
+    defaultValue:
+        '165605340230-3bvm248mk3bhlcf3ribccgdg69rmdkbs.apps.googleusercontent.com',
+  );
+
+  /// Web-only: the browser-facing OAuth client (origin-restricted, distinct
+  /// from the server/mobile client above — see backend
+  /// GOOGLE_OAUTH_WEB_CLIENT_ID). Must have this build's serving origin
+  /// registered under "Authorized JavaScript origins" in Google Cloud
+  /// Console, or sign-in fails with an origin-mismatch error.
+  static const String googleWebClientId = String.fromEnvironment(
+    'GOOGLE_WEB_CLIENT_ID',
+    defaultValue:
+        '165605340230-rvbdvcnsdveelikseiua263li34djqei.apps.googleusercontent.com',
   );
 
   /// Mapbox public token (pk.) — safe to embed in the client. Override with
