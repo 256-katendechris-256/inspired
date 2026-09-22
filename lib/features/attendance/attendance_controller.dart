@@ -1,12 +1,16 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:android_id/android_id.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 
 import '../../core/api/api_client.dart';
 import '../../core/location.dart';
+import '../../core/notifications/reminder_service.dart';
 import '../../core/offline/offline_store.dart';
 import 'attendance_data.dart';
 import 'sites.dart';
@@ -35,7 +39,11 @@ class AttendanceController extends StateNotifier<bool> {
   AttendanceController(this._ref) : super(false) {
     _connSub = Connectivity().onConnectivityChanged.listen((results) {
       final online = results.any((r) => r != ConnectivityResult.none);
-      if (online) syncPending();
+      if (online) {
+        syncPending();
+        // Back online → pick up any holiday/leave changes for the reminders.
+        ReminderService.instance.sync(_dio);
+      }
     });
     syncPending(); // attempt to drain any backlog on startup
   }
@@ -67,14 +75,16 @@ class AttendanceController extends StateNotifier<bool> {
         );
       }
       final bssid = await _bssid();
+      final deviceId = await _deviceId();
       final at = DateTime.now();
       try {
-        await _dio.post(_checkInPath, data: _payload(fix, bssid, at));
+        await _dio.post(_checkInPath, data: _payload(fix, bssid, at, deviceId: deviceId));
         _refresh();
+        unawaited(ReminderService.instance.onCheckedIn());
         return const ActionResult.success('Checked in.');
       } on DioException catch (e) {
         if (e.response != null) return ActionResult.failure(_message(e));
-        return _offlineCheckIn(fix, bssid, at);
+        return _offlineCheckIn(fix, bssid, at, deviceId);
       }
     } finally {
       state = false;
@@ -93,14 +103,15 @@ class AttendanceController extends StateNotifier<bool> {
         );
       }
       final bssid = await _bssid();
+      final deviceId = await _deviceId();
       final at = DateTime.now();
       try {
-        await _dio.post(_checkOutPath, data: _payload(fix, bssid, at));
+        await _dio.post(_checkOutPath, data: _payload(fix, bssid, at, deviceId: deviceId));
         _refresh();
         return const ActionResult.success('Checked out.');
       } on DioException catch (e) {
         if (e.response != null) return ActionResult.failure(_message(e));
-        return _offlineCheckOut(fix, bssid, at);
+        return _offlineCheckOut(fix, bssid, at, deviceId);
       }
     } finally {
       state = false;
@@ -113,6 +124,7 @@ class AttendanceController extends StateNotifier<bool> {
     PositionFix fix,
     String bssid,
     DateTime at,
+    String deviceId,
   ) async {
     final cached = _store.readSites();
     if (cached == null) {
@@ -146,8 +158,13 @@ class AttendanceController extends StateNotifier<bool> {
       at: at,
     );
     await _store.writeToday(rec.toJson());
-    await _store.enqueue({'type': 'check_in', ..._payload(fix, bssid, at, id: at)});
+    await _store.enqueue({
+      'type': 'check_in',
+      ..._payload(fix, bssid, at, id: at, deviceId: deviceId),
+    });
     _refresh();
+    // Queued or not, they've checked in — no more nudges today.
+    unawaited(ReminderService.instance.onCheckedIn());
     return const ActionResult.success(
       'Checked in offline — it will sync when you’re back online.',
     );
@@ -157,6 +174,7 @@ class AttendanceController extends StateNotifier<bool> {
     PositionFix fix,
     String bssid,
     DateTime at,
+    String deviceId,
   ) async {
     final today = _store.readToday();
     if (today == null || today['is_active'] != true) {
@@ -170,7 +188,10 @@ class AttendanceController extends StateNotifier<bool> {
       today['duration_minutes'] = at.toUtc().difference(ci.toUtc()).inMinutes;
     }
     await _store.writeToday(today);
-    await _store.enqueue({'type': 'check_out', ..._payload(fix, bssid, at, id: at)});
+    await _store.enqueue({
+      'type': 'check_out',
+      ..._payload(fix, bssid, at, id: at, deviceId: deviceId),
+    });
     _refresh();
     return const ActionResult.success(
       'Checked out offline — it will sync when you’re back online.',
@@ -193,6 +214,8 @@ class AttendanceController extends StateNotifier<bool> {
           'bssid': action['bssid'] ?? '',
           if (action['accuracy_m'] != null) 'accuracy_m': action['accuracy_m'],
           'occurred_at': action['occurred_at'],
+          if (action['device_id'] != null) 'device_id': action['device_id'],
+          if (action['mock_location'] == true) 'mock_location': true,
         });
         await _store.removeFromQueue(action['client_id'] as String);
       } on DioException catch (e) {
@@ -212,6 +235,7 @@ class AttendanceController extends StateNotifier<bool> {
     String bssid,
     DateTime at, {
     DateTime? id,
+    String deviceId = '',
   }) => {
     if (id != null) 'client_id': id.microsecondsSinceEpoch.toString(),
     'lat': fix.latLng.latitude,
@@ -219,6 +243,9 @@ class AttendanceController extends StateNotifier<bool> {
     'bssid': bssid,
     if (fix.accuracyM != null) 'accuracy_m': fix.accuracyM!.round(),
     'occurred_at': at.toUtc().toIso8601String(),
+    if (deviceId.isNotEmpty) 'device_id': deviceId,
+    // The server records this flag; it only knows if we tell it.
+    if (fix.isMocked) 'mock_location': true,
   };
 
   Future<String> _bssid() async {
@@ -229,9 +256,36 @@ class AttendanceController extends StateNotifier<bool> {
     }
   }
 
+  /// Hardware device identifier, read only at this check-in/out moment (same
+  /// privacy posture as location — see docs/SPRINT_0.md §12a). Used
+  /// server-side (hashed, never stored raw) purely to catch one phone being
+  /// used to check in/out for more than one employee in a day.
+  ///
+  /// On Android this MUST be Settings.Secure.ANDROID_ID (via the android_id
+  /// plugin), not device_info_plus's `androidInfo.id` — that field is
+  /// android.os.Build.ID, the OS *build* label (e.g. "TQ3A.230901.001"),
+  /// identical across every device running the same firmware image. Using
+  /// it here caused mass false "device sharing" flags across unrelated
+  /// employees whose phones simply share a build — see docs/notes on the
+  /// 2026-08 device-sharing false-positive incident.
+  Future<String> _deviceId() async {
+    try {
+      if (Platform.isAndroid) {
+        return await const AndroidId().getId() ?? '';
+      }
+      if (Platform.isIOS) {
+        final info = DeviceInfoPlugin();
+        return (await info.iosInfo).identifierForVendor ?? '';
+      }
+    } catch (_) {}
+    return '';
+  }
+
   void _refresh() {
     _ref.invalidate(todayProvider);
     _ref.invalidate(historyProvider);
+    // A check-in/out changes this month's calendar and the stats above it.
+    _ref.invalidate(monthCalendarProvider(monthKey(DateTime.now())));
   }
 
   String _message(DioException e) {

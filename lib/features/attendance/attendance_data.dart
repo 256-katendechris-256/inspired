@@ -186,3 +186,100 @@ final historyProvider = FutureProvider<List<AttendanceRecord>>((ref) async {
       .map((e) => AttendanceRecord.fromJson(Map<String, dynamic>.from(e as Map)))
       .toList();
 });
+
+/// One checked-in day on the month calendar.
+class CalendarDay {
+  const CalendarDay({
+    required this.date,
+    required this.checkIn,
+    required this.checkOut,
+    required this.hours,
+    required this.late,
+    required this.overtime,
+  });
+
+  /// "YYYY-MM-DD" (local date).
+  final String date;
+  final String checkIn;
+  final String? checkOut;
+  final double hours;
+  final bool late;
+  final bool overtime;
+
+  factory CalendarDay.fromJson(Map<String, dynamic> j) => CalendarDay(
+    date: j['date'] as String,
+    checkIn: j['check_in'] as String,
+    checkOut: j['check_out'] as String?,
+    hours: (j['hours'] as num?)?.toDouble() ?? 0,
+    late: j['late'] as bool? ?? false,
+    overtime: j['overtime'] as bool? ?? false,
+  );
+}
+
+/// The signed-in employee's month, in the same shape the dashboard draws its
+/// profile calendar from (GET /api/attendance/me/calendar?month=YYYY-MM).
+class MonthCalendar {
+  const MonthCalendar({
+    required this.month,
+    required this.days,
+    required this.leaveDates,
+    required this.holidays,
+    required this.daysPresent,
+    required this.totalHours,
+    required this.avgHours,
+    required this.expectedDays,
+    required this.attendanceRate,
+  });
+
+  /// "YYYY-MM".
+  final String month;
+  final Map<String, CalendarDay> days;
+  final Set<String> leaveDates;
+
+  /// date -> holiday name.
+  final Map<String, String> holidays;
+  final int daysPresent;
+  final double totalHours;
+  final double avgHours;
+  final int expectedDays;
+  final double attendanceRate;
+
+  factory MonthCalendar.fromJson(Map<String, dynamic> j) {
+    final m = (j['metrics'] as Map?)?.cast<String, dynamic>() ?? const {};
+    return MonthCalendar(
+      month: j['month'] as String,
+      days: {
+        for (final e in (j['days'] as List? ?? const []))
+          (e as Map)['date'] as String:
+              CalendarDay.fromJson(Map<String, dynamic>.from(e)),
+      },
+      leaveDates: ((j['leave_dates'] as List?) ?? const []).cast<String>().toSet(),
+      holidays: {
+        for (final e in (j['holidays'] as List? ?? const []))
+          (e as Map)['date'] as String: (e)['name'] as String,
+      },
+      daysPresent: m['days_present'] as int? ?? 0,
+      totalHours: (m['total_hours'] as num?)?.toDouble() ?? 0,
+      avgHours: (m['avg_hours'] as num?)?.toDouble() ?? 0,
+      expectedDays: m['expected_days'] as int? ?? 0,
+      attendanceRate: (m['attendance_rate'] as num?)?.toDouble() ?? 0,
+    );
+  }
+}
+
+/// "YYYY-MM" for [d].
+String monthKey(DateTime d) =>
+    '${d.year}-${d.month.toString().padLeft(2, '0')}';
+
+/// The calendar for one month, keyed by "YYYY-MM". Kept alive so paging back
+/// and forth between months doesn't refetch each time.
+final monthCalendarProvider =
+    FutureProvider.family<MonthCalendar, String>((ref, month) async {
+  ref.keepAlive();
+  final dio = ref.watch(dioProvider);
+  final res = await dio.get(
+    '/api/attendance/me/calendar',
+    queryParameters: {'month': month},
+  );
+  return MonthCalendar.fromJson(Map<String, dynamic>.from(res.data as Map));
+});
