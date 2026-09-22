@@ -61,6 +61,9 @@ class AppDrawer extends ConsumerWidget {
         Navigator.pop(c);
         c.go('/history');
       }),
+      if (user?.managesTeam ?? false)
+        _Entry(Icons.groups_outlined, 'My department', Brand.orange,
+            (c, r) => _go(c, '/department')),
       _Entry(Icons.checklist_rtl, 'Tasks', Brand.blue,
           (c, r) => _go(c, '/tasks')),
       _Entry(Icons.outbox_outlined, 'Requests', Brand.orange,

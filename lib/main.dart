@@ -7,6 +7,7 @@ import 'core/api/api_client.dart';
 import 'core/router.dart';
 import 'core/theme.dart';
 import 'features/attendance/attendance_controller.dart';
+import 'features/team/team_controller.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -39,6 +40,8 @@ class InspiredApp extends ConsumerWidget {
     // after the phone was back online. `read` (not `watch`): we only want it
     // alive, not to rebuild the app when it goes busy.
     ref.read(attendanceControllerProvider.notifier);
+    // Same reasoning for a manager's queued marks and absence notes.
+    ref.read(teamControllerProvider.notifier);
     final router = ref.watch(routerProvider);
     return MaterialApp.router(
       title: 'Inspire Africa',

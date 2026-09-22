@@ -15,6 +15,7 @@ import '../features/requests/finance_requisition_screen.dart';
 import '../features/requests/requests_hub_screen.dart';
 import '../features/requests/store_request_screen.dart';
 import '../features/splash/splash_screen.dart';
+import '../features/team/team_screen.dart';
 import '../features/tasks/tasks_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
@@ -34,6 +35,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(path: '/history', builder: (_, _) => const AttendanceScreen()),
       GoRoute(path: '/tasks', builder: (_, _) => const TasksScreen()),
+      GoRoute(path: '/department', builder: (_, _) => const TeamScreen()),
       GoRoute(path: '/requests', builder: (_, _) => const RequestsHubScreen()),
       GoRoute(path: '/requests/leave', builder: (_, _) => const LeaveScreen()),
       GoRoute(
