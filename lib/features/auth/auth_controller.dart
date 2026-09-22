@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -31,6 +32,11 @@ class AppUser {
 
   bool get isHod => role == 'hod';
 
+  /// May see and vouch for a department roster — a HOD for their own people,
+  /// System Admin for anyone's. Mirrors TEAM_ROLES on the server; the server
+  /// enforces it, this only decides whether to offer the door.
+  bool get managesTeam => role == 'hod' || role == 'admin';
+
   String get firstName => fullName.split(' ').first;
 
   factory AppUser.fromJson(Map<String, dynamic> json) => AppUser(
@@ -41,6 +47,16 @@ class AppUser {
     department: json['department'] as String? ?? '',
     mustChangePassword: json['must_change_password'] as bool? ?? false,
   );
+
+  /// The same shape [fromJson] reads, for the cached profile.
+  Map<String, dynamic> toJson() => {
+    'employee_id': employeeId,
+    'full_name': fullName,
+    'email': email,
+    'role': role,
+    'department': department,
+    'must_change_password': mustChangePassword,
+  };
 
   AppUser copyWith({bool? mustChangePassword}) => AppUser(
     employeeId: employeeId,
@@ -100,6 +116,13 @@ class AuthController extends StateNotifier<AuthState> {
   /// Decide where to send the user on launch. The persisted access token is
   /// loaded into memory; the /me call auto-refreshes via the Dio interceptor
   /// if the access token has expired, so sessions survive app restarts.
+  ///
+  /// Being offline is not being signed out. A refresh token is good for 30
+  /// days, and the whole point of the offline queue is that someone can open
+  /// the app at a site with no signal and still record attendance — so an
+  /// unreachable server falls back to the profile cached at the last
+  /// successful launch. Only the server actually rejecting the session
+  /// clears it.
   Future<void> bootstrap() async {
     final access = _prefs.getString(kAccessTokenKey);
     if (access == null || access.isEmpty) {
@@ -110,6 +133,7 @@ class AuthController extends StateNotifier<AuthState> {
     try {
       final res = await _dio.get('/api/auth/me');
       final user = AppUser.fromJson(Map<String, dynamic>.from(res.data));
+      await _cacheUser(user);
       state = AuthState(
         status: user.mustChangePassword
             ? AuthStatus.mustResetPassword
@@ -120,9 +144,30 @@ class AuthController extends StateNotifier<AuthState> {
         unawaited(PushService.instance.registerWithBackend(_dio));
         unawaited(ReminderService.instance.sync(_dio));
       }
-    } on DioException {
+    } on DioException catch (e) {
+      final cached = e.response == null ? _cachedUser() : null;
+      if (cached != null) {
+        // Offline with a session we have no reason to doubt.
+        state = AuthState(status: AuthStatus.authenticated, user: cached);
+        return;
+      }
       await _clearTokens();
       state = const AuthState(status: AuthStatus.unauthenticated);
+    }
+  }
+
+  static const _kCachedUser = 'inspired.user.v1';
+
+  Future<void> _cacheUser(AppUser user) =>
+      _prefs.setString(_kCachedUser, jsonEncode(user.toJson()));
+
+  AppUser? _cachedUser() {
+    final raw = _prefs.getString(_kCachedUser);
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      return AppUser.fromJson(Map<String, dynamic>.from(jsonDecode(raw) as Map));
+    } catch (_) {
+      return null;
     }
   }
 
@@ -292,6 +337,7 @@ class AuthController extends StateNotifier<AuthState> {
     _tokens.accessToken = null;
     await _prefs.remove(kAccessTokenKey);
     await _prefs.remove(kRefreshTokenKey);
+    await _prefs.remove(_kCachedUser);
   }
 
   String _detail(DioException e, {required String fallback}) {
