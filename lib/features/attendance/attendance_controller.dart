@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:android_id/android_id.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/widgets.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -45,11 +46,18 @@ class AttendanceController extends StateNotifier<bool> {
         ReminderService.instance.sync(_dio);
       }
     });
+    // Connectivity events only arrive while we're running. Someone who checks
+    // in at the gate with no signal, locks the phone and reaches WiFi an hour
+    // later gets no event at all — the backlog would sit there until they
+    // happened to open the attendance page. Syncing on resume covers that.
+    _lifecycle = AppLifecycleListener(onResume: syncPending);
     syncPending(); // attempt to drain any backlog on startup
   }
 
   final Ref _ref;
   StreamSubscription<List<ConnectivityResult>>? _connSub;
+  AppLifecycleListener? _lifecycle;
+  bool _syncing = false;
 
   OfflineStore get _store => _ref.read(offlineStoreProvider);
   Dio get _dio => _ref.read(dioProvider);
@@ -60,6 +68,7 @@ class AttendanceController extends StateNotifier<bool> {
   @override
   void dispose() {
     _connSub?.cancel();
+    _lifecycle?.dispose();
     super.dispose();
   }
 
@@ -202,8 +211,26 @@ class AttendanceController extends StateNotifier<bool> {
 
   /// Best-effort flush of the queued offline actions. Safe to call anytime.
   Future<void> syncPending() async {
+    // Startup, a connectivity event, a resume and a check-in can all land at
+    // once; without this the same queued action posts more than once.
+    if (_syncing) return;
     final queue = _store.readQueue();
     if (queue.isEmpty) return;
+    // We run from app start now, which can be before the session is restored.
+    // Posting unauthenticated would only earn a 401 per queued action, so wait
+    // for a token — a connectivity change, a resume or the next check-in will
+    // bring us back here.
+    final token = _ref.read(authTokenStoreProvider).accessToken;
+    if (token == null || token.isEmpty) return;
+    _syncing = true;
+    try {
+      await _drain(queue);
+    } finally {
+      _syncing = false;
+    }
+  }
+
+  Future<void> _drain(List<Map<String, dynamic>> queue) async {
     for (final action in List<Map<String, dynamic>>.from(queue)) {
       final path =
           action['type'] == 'check_out' ? _checkOutPath : _checkInPath;
@@ -220,8 +247,13 @@ class AttendanceController extends StateNotifier<bool> {
         await _store.removeFromQueue(action['client_id'] as String);
       } on DioException catch (e) {
         if (e.response == null) return; // still offline — retry later
-        // Server rejected it (duplicate / out of range); drop so it can't
-        // block the queue forever.
+        final code = e.response!.statusCode ?? 0;
+        // Never discard someone's attendance over a problem that isn't about
+        // the attendance: an expired session or a server having a bad day
+        // both resolve on their own, and dropping here would lose a shift
+        // they actually worked. Only a considered "no" from the server
+        // (duplicate, out of range) retires an action.
+        if (code == 401 || code == 403 || code >= 500) return;
         await _store.removeFromQueue(action['client_id'] as String);
       }
     }

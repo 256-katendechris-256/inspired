@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'core/api/api_client.dart';
 import 'core/router.dart';
 import 'core/theme.dart';
+import 'features/attendance/attendance_controller.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -31,6 +32,13 @@ class InspiredApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Build the attendance controller up front. It owns the connectivity and
+    // resume listeners that flush offline check-ins, and Riverpod providers
+    // are lazy — left to itself it wasn't constructed until someone opened
+    // the attendance page, so a check-in made offline sat in the queue even
+    // after the phone was back online. `read` (not `watch`): we only want it
+    // alive, not to rebuild the app when it goes busy.
+    ref.read(attendanceControllerProvider.notifier);
     final router = ref.watch(routerProvider);
     return MaterialApp.router(
       title: 'Inspire Africa',
