@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -37,7 +37,10 @@ class AppUser {
   /// enforces it, this only decides whether to offer the door.
   bool get managesTeam => role == 'hod' || role == 'admin';
 
-  String get firstName => fullName.split(' ').first;
+  String get firstName {
+    final first = fullName.trim().split(' ').first;
+    return first.isEmpty ? 'there' : first;
+  }
 
   factory AppUser.fromJson(Map<String, dynamic> json) => AppUser(
     employeeId: json['employee_id'] as String? ?? '',
@@ -113,16 +116,15 @@ class AuthController extends StateNotifier<AuthState> {
 
   static const _noAuth = {'auth': false};
 
-  /// Decide where to send the user on launch. The persisted access token is
-  /// loaded into memory; the /me call auto-refreshes via the Dio interceptor
-  /// if the access token has expired, so sessions survive app restarts.
+  /// Decide where to send the user on launch.
   ///
-  /// Being offline is not being signed out. A refresh token is good for 30
-  /// days, and the whole point of the offline queue is that someone can open
-  /// the app at a site with no signal and still record attendance — so an
-  /// unreachable server falls back to the profile cached at the last
-  /// successful launch. Only the server actually rejecting the session
-  /// clears it.
+  /// Being offline is not being signed out. Anyone who signed in on this
+  /// phone opens straight into the app from the profile cached at their last
+  /// sign-in, and the session is checked with the server in the background.
+  /// Only the server actually *rejecting* it (401/403 after a refresh
+  /// attempt) signs them out — never a timeout, a dead zone, or a 502 while
+  /// the backend redeploys. The refresh token slides, so daily users are
+  /// never asked to sign in again.
   Future<void> bootstrap() async {
     final access = _prefs.getString(kAccessTokenKey);
     if (access == null || access.isEmpty) {
@@ -130,29 +132,74 @@ class AuthController extends StateNotifier<AuthState> {
       return;
     }
     _tokens.accessToken = access;
+
+    final known = _cachedUser() ?? _userFromToken(access);
+    if (known != null) {
+      state = _stateFor(known);
+      unawaited(revalidation = _revalidate());
+      return;
+    }
+    // Tokens but no idea who they belong to (should not happen): ask.
+    await _revalidate();
+    if (state.status == AuthStatus.unknown) {
+      state = const AuthState(status: AuthStatus.unauthenticated);
+    }
+  }
+
+  /// The background session check started by [bootstrap], for tests.
+  @visibleForTesting
+  Future<void>? revalidation;
+
+  AuthState _stateFor(AppUser user) => AuthState(
+    status: user.mustChangePassword
+        ? AuthStatus.mustResetPassword
+        : AuthStatus.authenticated,
+    user: user,
+  );
+
+  /// Confirm the session with the server and refresh the cached profile.
+  Future<void> _revalidate() async {
     try {
       final res = await _dio.get('/api/auth/me');
       final user = AppUser.fromJson(Map<String, dynamic>.from(res.data));
       await _cacheUser(user);
-      state = AuthState(
-        status: user.mustChangePassword
-            ? AuthStatus.mustResetPassword
-            : AuthStatus.authenticated,
-        user: user,
-      );
+      state = _stateFor(user);
       if (!user.mustChangePassword) {
         unawaited(PushService.instance.registerWithBackend(_dio));
         unawaited(ReminderService.instance.sync(_dio));
       }
     } on DioException catch (e) {
-      final cached = e.response == null ? _cachedUser() : null;
-      if (cached != null) {
-        // Offline with a session we have no reason to doubt.
-        state = AuthState(status: AuthStatus.authenticated, user: cached);
-        return;
+      final code = e.response?.statusCode;
+      if (code == 401 || code == 403) {
+        await _clearTokens();
+        state = const AuthState(status: AuthStatus.unauthenticated);
       }
-      await _clearTokens();
-      state = const AuthState(status: AuthStatus.unauthenticated);
+      // Anything else — no signal, timeout, 5xx, 429 — keeps the session.
+    }
+  }
+
+  /// A minimal profile read from the access token's own claims, for someone
+  /// who signed in before the profile was cached. The next successful
+  /// revalidation fills in their name.
+  AppUser? _userFromToken(String jwt) {
+    try {
+      final parts = jwt.split('.');
+      if (parts.length != 3) return null;
+      final claims = jsonDecode(
+        utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
+      ) as Map<String, dynamic>;
+      final id = claims['employee_id'] as String?;
+      if (id == null || id.isEmpty) return null;
+      return AppUser(
+        employeeId: id,
+        fullName: '',
+        email: claims['email'] as String? ?? '',
+        role: claims['role'] as String? ?? 'employee',
+        department: claims['dept_code'] as String? ?? '',
+        mustChangePassword: false,
+      );
+    } catch (_) {
+      return null;
     }
   }
 
@@ -290,15 +337,14 @@ class AuthController extends StateNotifier<AuthState> {
     await _prefs.setString(kAccessTokenKey, data['access'] as String);
     await _prefs.setString(kRefreshTokenKey, data['refresh'] as String);
     final user = AppUser.fromJson(Map<String, dynamic>.from(data['employee']));
-    state = AuthState(
-      status: user.mustChangePassword
-          ? AuthStatus.mustResetPassword
-          : AuthStatus.authenticated,
-      user: user,
-    );
+    // Cache now, not at the next launch: otherwise the first time someone
+    // opens the app without signal after signing in, there is no profile to
+    // open with.
+    await _cacheUser(user);
+    state = _stateFor(user);
     if (!user.mustChangePassword) {
       unawaited(PushService.instance.registerWithBackend(_dio));
-        unawaited(ReminderService.instance.sync(_dio));
+      unawaited(ReminderService.instance.sync(_dio));
     }
   }
 
@@ -312,9 +358,10 @@ class AuthController extends StateNotifier<AuthState> {
       final user = AppUser.fromJson(
         Map<String, dynamic>.from(res.data['employee']),
       );
+      await _cacheUser(user);
       state = AuthState(status: AuthStatus.authenticated, user: user);
       unawaited(PushService.instance.registerWithBackend(_dio));
-        unawaited(ReminderService.instance.sync(_dio));
+      unawaited(ReminderService.instance.sync(_dio));
     } on DioException catch (e) {
       throw AuthException(_detail(e, fallback: 'Could not update your password.'));
     }

@@ -7,6 +7,7 @@ import 'core/api/api_client.dart';
 import 'core/router.dart';
 import 'core/theme.dart';
 import 'features/attendance/attendance_controller.dart';
+import 'features/auth/auth_controller.dart';
 import 'features/team/team_controller.dart';
 
 void main() async {
@@ -43,6 +44,16 @@ class InspiredApp extends ConsumerWidget {
     // Same reasoning for a manager's queued marks and absence notes.
     ref.read(teamControllerProvider.notifier);
     final router = ref.watch(routerProvider);
+    // The session is confirmed in the background after launch. If the
+    // server turns out to have revoked it (deactivated, password reset),
+    // leave whatever screen we opened on for the sign-in page.
+    ref.listen<AuthState>(authControllerProvider, (prev, next) {
+      final wasIn = prev?.status == AuthStatus.authenticated ||
+          prev?.status == AuthStatus.mustResetPassword;
+      if (wasIn && next.status == AuthStatus.unauthenticated) {
+        router.go('/login');
+      }
+    });
     return MaterialApp.router(
       title: 'Inspire Africa',
       debugShowCheckedModeBanner: false,
