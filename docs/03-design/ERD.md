@@ -205,6 +205,27 @@ posture (SPRINT_0 §13) — a flag for the HR review queue, never an auto-reject
 ### AppVersion (Phase 1 preview)
 Backs `GET /app/versions/latest`. Standalone catalog; no relationships.
 
+### Requisitions (built — `inspired-api/apps/requisitions`)
+Backfilled 2026-09-26; these shipped before this document tracked them.
+
+- **StoreRequest** → **StoreRequestItem** (1 : many). Mirrors the paper
+  "Request Note": Stores verifies → requester's HOD approves → Stores issues.
+  Each stage stores `*_decision`, `*_by` (Employee), `*_at`, `*_note`.
+- **FinanceRequisition** → **FinanceRequisitionItem** (1 : many). Mirrors the
+  Requisition Form: particulars × qty × unit cost; HOD recommends → Finance
+  authorises. `amount_in_words` is **derived from the total on the server**,
+  never typed, so the words can't disagree with the figures.
+- **FinanceRequisitionAttachment** (FinanceRequisition 1 : many, max 5,
+  ≤10 MB each). Quotations, invoices, receipt photos, budgets — PDF,
+  JPG/PNG/WEBP, DOCX, XLSX, CSV, checked by content not just extension.
+  **Bytes are stored in Postgres** (`BinaryField`) because Railway's disk is
+  wiped on every deploy and no object store exists; if volume grows, move
+  `data` to object storage and keep the row as metadata. The printed form
+  (`…/finance/<id>/pdf`) appends every attachment behind it as A4 pages, each
+  footed with the `FR-#####` reference; the original stays downloadable.
+- Nobody decides on their own requisition. When the requester is their
+  department's only HOD, System Admin is notified to stand in.
+
 ---
 
 ## 4. Referential integrity summary
@@ -217,6 +238,9 @@ Backs `GET /app/versions/latest`. Standalone catalog; no relationships.
 | Employee → DeviceToken | 1 : many | CASCADE | Tokens are meaningless without the person |
 | Employee → AttendanceRecord | 1 : many | PROTECT *(planned)* | Attendance is a legal/HR record — preserve |
 | Site → AttendanceRecord | 1 : many | PROTECT *(planned)* | Preserve the verified location |
+| Employee → Store/FinanceRequisition | 1 : many | CASCADE | Requests belong to the requester |
+| FinanceRequisition → Item / Attachment | 1 : many | CASCADE | Lines and documents are part of the form |
+| Employee (approver/uploader) → requisition stages | 1 : many | SET_NULL | An approver leaving doesn't erase the decision |
 
 ---
 
@@ -237,7 +261,7 @@ Listed so the model's growth is anticipated, not invented prematurely:
 | Future entity | Phase | Will relate to |
 |---|---|---|
 | `LeaveRequest` | Leave module | Employee, approver (Employee) |
-| `ItemRequest` / `StoreItem` | Phase 3 | Employee, Department, Site |
+| ~~`ItemRequest` / `StoreItem`~~ | Phase 3 | Built as `StoreRequest` — see §3 Requisitions. A stock catalogue (`StoreItem`) is still not modeled |
 | `Project` / `ProjectTask` | Phase 4 | Department, Site, Employee |
 | `AuditEvent` | Cross-cutting | Employee (actor) — security events only (§12a.6) |
 
@@ -250,3 +274,4 @@ When a phase begins, add its entities to §2 and promote them out of this list.
 | Date | Change |
 |---|---|
 | 2026-06-18 | Initial ERD — Sprint 0 committed entities + Phase 1 preview |
+| 2026-09-26 | Backfilled requisitions (store + finance) and added finance attachments |

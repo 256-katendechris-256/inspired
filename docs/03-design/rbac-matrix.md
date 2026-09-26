@@ -76,6 +76,12 @@ Notes:
   does not see request lists; HR does not see store/finance requests. Each
   party is notified (inbox + push) when a request reaches their stage, and
   can download the filled-in form as a PDF.
+- **Finance requisition documents** (2026-09-26): the requester may attach up
+  to 5 supporting documents when submitting, and add or remove them until the
+  HOD decides; anyone who can see the requisition can open them, and the PDF
+  carries them appended behind the form. **No one approves their own
+  requisition** at either stage — a HOD's own goes to System Admin, a Finance
+  clerk's own to another Finance member.
 - **Leave types are data, not code** (`leave.LeaveType`): HR/Admin set the
   yearly entitlement, description and gender restriction. Defaults: annual 21,
   sick 14, maternity 60 (women), paternity 4 (men), unpaid/other 0. A type

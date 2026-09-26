@@ -125,3 +125,6 @@ against.
 3. Backfill the missing finance-requisition / store-request entities into
    `docs/03-design/ERD.md` and `docs/03-design/rbac-matrix.md` while touching
    this area — they predate this plan and were never documented.
+   *Done 2026-09-26.* Note for the field mapping: requisitions now also carry
+   supporting documents (`FinanceRequisitionAttachment`) — ask the ERP owners
+   whether they want the originals, the merged PDF, or neither.
