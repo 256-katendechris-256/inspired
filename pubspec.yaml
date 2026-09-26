@@ -57,6 +57,9 @@ dependencies:
   flutter_local_notifications: ^18.0.1
   # Scheduled (offline) sign-in reminders need zoned times.
   timezone: ^0.10.0
+  file_picker: ^11.0.3
+  image_picker: ^1.2.3
+  open_filex: ^4.7.0
 
 dev_dependencies:
   flutter_test:
