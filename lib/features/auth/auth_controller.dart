@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -303,9 +304,40 @@ class AuthController extends StateNotifier<AuthState> {
   /// Mobile only — web signs in via the rendered button in
   /// google_web_button_web.dart, picked up by [ensureGoogleWebListener].
   Future<void> signInWithGoogle() async {
-    final account = await _googleSignIn.signIn();
+    final GoogleSignInAccount? account;
+    try {
+      account = await _googleSignIn.signIn();
+    } on PlatformException catch (e) {
+      final message = googleFailure(e);
+      if (message == null) return; // user backed out of the picker
+      throw AuthException(message);
+    }
     if (account == null) return; // user dismissed the account picker
     await _exchangeGoogleAccount(account);
+  }
+
+  /// Google Play services reports failures as "ApiException: <code>" inside
+  /// the PlatformException message. Say what actually went wrong instead of
+  /// a generic retry prompt — code 10 in particular never fixes itself.
+  @visibleForTesting
+  static String? googleFailure(PlatformException e) {
+    final text = '${e.code} ${e.message}';
+    final code = RegExp(r'ApiException: (\d+)').firstMatch(text)?.group(1);
+    switch (code) {
+      case '12501': // SIGN_IN_CANCELLED
+        return null;
+      case '10': // DEVELOPER_ERROR: this APK's signing key isn't registered
+        return 'Google sign-in isn\'t enabled for this version of the app yet. '
+            'Sign in with your employee ID and password for now, and let your admin know (Google error 10).';
+      case '7': // NETWORK_ERROR
+        return 'Can\'t reach Google. Check your connection and try again.';
+      case '12500': // SIGN_IN_FAILED — usually Play services out of date
+        return 'Google sign-in failed on this phone. Update Google Play services, or sign in with your employee ID and password.';
+    }
+    if (e.code == 'network_error') {
+      return 'Can\'t reach Google. Check your connection and try again.';
+    }
+    return 'Google sign-in failed (${code ?? e.code}). Try again, or sign in with your employee ID and password.';
   }
 
   /// Shared tail of both Google sign-in paths: trade the account's idToken

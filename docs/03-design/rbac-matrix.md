@@ -76,6 +76,20 @@ Notes:
   does not see request lists; HR does not see store/finance requests. Each
   party is notified (inbox + push) when a request reaches their stage, and
   can download the filled-in form as a PDF.
+- **Requests go to HODs, not to departments' staff** (2026-09-26): a store
+  request is verified and issued by the **Stores HOD**, a finance requisition
+  is signed off by the **Finance HOD** — ordinary Stores/Finance staff neither
+  see nor receive other people's requests. Leave's second stage stays with HR
+  Managers (role `hr`). With no HOD in the addressed department, System Admin
+  is notified instead. Department codes are configurable
+  (`FINANCE_DEPT_CODE`, `STORES_DEPT_CODE`, defaults `FIN` / `STORES`).
+  Whoever approved at the HOD stage can't also sign for Finance.
+- **A department without a HOD is headed by System Admin** (2026-09-28): the
+  admin who belongs to it (IT's head is its System Admin), else any admin,
+  takes its HOD stage for leave, store and finance. System Admin's own
+  requests skip the HOD stage — nobody is above them — but still need the
+  next stage (HR / Stores / Finance). Nobody decides their own request at
+  any stage. The Finance HOD may approve a reduced amount, with a reason.
 - **Finance requisition documents** (2026-09-26): the requester may attach up
   to 5 supporting documents when submitting, and add or remove them until the
   HOD decides; anyone who can see the requisition can open them, and the PDF

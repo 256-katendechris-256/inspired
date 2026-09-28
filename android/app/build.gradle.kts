@@ -58,6 +58,11 @@ android {
 
     buildTypes {
         release {
+            // Keep what reflection-based plugins need; see proguard-rules.pro.
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             // Falls back to the debug key only if key.properties is missing
             // (e.g. a fresh checkout without the real keystore) — every real
             // release build must use the "release" config above, or updates

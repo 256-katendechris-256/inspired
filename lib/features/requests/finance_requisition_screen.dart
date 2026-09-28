@@ -1,5 +1,5 @@
+import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
@@ -7,12 +7,11 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:open_filex/open_filex.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../../core/api/api_client.dart';
 import '../../core/brand.dart';
 import '../auth/auth_controller.dart';
+import 'request_kit.dart';
 
 // Mirrors apps/requisitions/attachments.py — the server enforces the same
 // limits; checking here just saves uploading a file that will be refused.
@@ -123,6 +122,13 @@ class FinanceRequisitionView {
     this.hodNote = '',
     this.financeDecision = 'pending',
     this.financeNote = '',
+    this.approvedAmount,
+    this.reductionReason = '',
+    this.fullName = '',
+    this.department = '',
+    this.hodByName = '',
+    this.financeByName = '',
+    this.canDecide,
   });
   final int id;
   final String employeeId;
@@ -136,6 +142,19 @@ class FinanceRequisitionView {
   final String hodNote;
   final String financeDecision;
   final String financeNote;
+  /// What Finance authorised — may be less than [total]; null until approved.
+  final double? approvedAmount;
+  final String reductionReason;
+  final String fullName;
+  final String department;
+  final String hodByName;
+  final String financeByName;
+
+  /// The decision the signed-in user can make now, as the server sees it:
+  /// 'hod-decision', 'decision' (Finance) or null.
+  final String? canDecide;
+
+  bool get isReduced => approvedAmount != null && approvedAmount! < total;
 
   String get reference => 'FR-${id.toString().padLeft(5, '0')}';
 
@@ -153,6 +172,13 @@ class FinanceRequisitionView {
         hodNote: hodNote,
         financeDecision: financeDecision,
         financeNote: financeNote,
+        approvedAmount: approvedAmount,
+        reductionReason: reductionReason,
+        fullName: fullName,
+        department: department,
+        hodByName: hodByName,
+        financeByName: financeByName,
+        canDecide: canDecide,
       );
 
   String get itemSummary =>
@@ -183,58 +209,38 @@ class FinanceRequisitionView {
       hodNote: j['hod_note'] as String? ?? '',
       financeDecision: j['finance_decision'] as String? ?? 'pending',
       financeNote: j['finance_note'] as String? ?? '',
+      approvedAmount: (j['approved_amount'] as num?)?.toDouble(),
+      reductionReason: j['reduction_reason'] as String? ?? '',
+      fullName: j['full_name'] as String? ?? '',
+      department: j['department'] as String? ?? '',
+      hodByName: j['hod_by_name'] as String? ?? '',
+      financeByName: j['finance_by_name'] as String? ?? '',
+      canDecide: j['can_decide'] as String?,
     );
   }
 }
 
-String _dioMessage(Object e, String fallback) {
-  if (e is DioException) {
-    if (e.response == null) return 'No connection. Try again when you have signal.';
-    final data = e.response?.data;
-    if (data is Map && data['detail'] is String) return data['detail'] as String;
-  }
-  return fallback;
-}
+String _dioMessage(Object e, String fallback) => apiError(e, fallback);
 
-/// Download a file from the API into the temp folder and hand it to
-/// whatever app on the phone opens that type (PDF viewer, gallery, Excel).
-Future<void> _openRemote(
+/// Share the filled-in form (with its documents) — WhatsApp, email, Drive on
+/// a phone; the browser's share sheet or a download on the web.
+Future<void> _shareRequisition(
   BuildContext context,
   Dio dio,
-  String url,
-  String filename,
-) async {
-  final messenger = ScaffoldMessenger.of(context);
-  if (kIsWeb) {
-    messenger.showSnackBar(
-      const SnackBar(content: Text('Open this from the dashboard on the web.')),
+  FinanceRequisitionView r,
+) =>
+    shareApiPdf(
+      context,
+      dio,
+      url: '/api/requisitions/finance/${r.id}/pdf',
+      filename: 'requisition-${r.reference}.pdf',
+      text: 'Finance requisition ${r.reference}: UGX ${_money(r.approvedAmount ?? r.total)}'
+          '${r.itemSummary.isEmpty ? '' : ' — ${r.itemSummary}'}',
+      subject: 'Requisition ${r.reference}',
     );
-    return;
-  }
-  messenger.showSnackBar(
-    SnackBar(content: Text('Opening $filename…'), duration: const Duration(seconds: 2)),
-  );
-  try {
-    final res = await dio.get<List<int>>(
-      url,
-      options: Options(responseType: ResponseType.bytes),
-    );
-    final dir = await getTemporaryDirectory();
-    final safe = filename.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
-    final file = File('${dir.path}/$safe');
-    await file.writeAsBytes(res.data ?? const []);
-    final result = await OpenFilex.open(file.path);
-    if (result.type != ResultType.done) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('No app on this phone can open $filename.')),
-      );
-    }
-  } catch (e) {
-    messenger.showSnackBar(
-      SnackBar(content: Text(_dioMessage(e, 'Could not open $filename.'))),
-    );
-  }
-}
+
+Future<void> _openRemote(BuildContext context, Dio dio, String url, String filename) =>
+    openApiFile(context, dio, url, filename);
 
 class FinanceRequisitionScreen extends ConsumerStatefulWidget {
   const FinanceRequisitionScreen({super.key});
@@ -380,7 +386,7 @@ class _FinanceRequisitionScreenState
           'files': [for (final d in _docs) await d.toMultipart()],
         });
       }
-      await dio.post(
+      final res = await dio.post(
         '/api/requisitions/finance',
         data: body,
         // Documents on a weak signal take a while; don't give up at 15s.
@@ -403,12 +409,9 @@ class _FinanceRequisitionScreenState
           ..add(_ItemDraft());
         _docs.clear();
       });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Requisition sent to your HOD.')),
-        );
-      }
-      await _load();
+      final sent = FinanceRequisitionView.fromJson(Map<String, dynamic>.from(res.data));
+      unawaited(_load());
+      if (mounted) await _showSubmitted(sent);
     } catch (e) {
       setState(() => _error = _dioMessage(e, 'Could not submit your requisition.'));
     } finally {
@@ -419,6 +422,55 @@ class _FinanceRequisitionScreenState
         });
       }
     }
+  }
+
+  /// Confirmation after submitting, with the form ready to share — a
+  /// requester often has to forward it to someone the moment it's in.
+  Future<void> _showSubmitted(FinanceRequisitionView r) {
+    return showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (sheet) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 22, 20, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Icon(Icons.check_circle, color: Brand.green, size: 44),
+              const SizedBox(height: 10),
+              Text(
+                'Requisition ${r.reference} submitted',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 17, color: Brand.ink),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'UGX ${_money(r.total)} · sent to your HOD for approval.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Brand.slate),
+              ),
+              const SizedBox(height: 18),
+              Builder(
+                builder: (btn) => FilledButton.icon(
+                  onPressed: () => _shareRequisition(btn, ref.read(dioProvider), r),
+                  icon: const Icon(Icons.share_outlined),
+                  label: const Text('Share form (PDF)'),
+                ),
+              ),
+              const SizedBox(height: 6),
+              TextButton(
+                onPressed: () => Navigator.of(sheet).pop(),
+                child: const Text('Done'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   void _openDetail(FinanceRequisitionView r) {
@@ -467,13 +519,32 @@ class _FinanceRequisitionScreenState
                   child: Text('No requisitions yet.', style: TextStyle(color: Brand.slate)),
                 ),
               )
-            else
-              ..._items.map(_buildRow),
+            else ...[
+              if (_toDecide.isNotEmpty) ...[
+                _sectionLabel('Needs your decision (${_toDecide.length})', Brand.orange),
+                ..._toDecide.map(_buildRow),
+                if (_others.isNotEmpty) _sectionLabel('All requisitions', Brand.slate),
+              ],
+              ..._others.map(_buildRow),
+            ],
           ],
         ),
       ),
     );
   }
+
+  List<FinanceRequisitionView> get _toDecide =>
+      _items.where((r) => r.canDecide != null).toList();
+  List<FinanceRequisitionView> get _others =>
+      _items.where((r) => r.canDecide == null).toList();
+
+  Widget _sectionLabel(String text, Color color) => Padding(
+        padding: const EdgeInsets.only(top: 4, bottom: 8),
+        child: Text(
+          text,
+          style: TextStyle(fontWeight: FontWeight.w700, color: color, fontSize: 13),
+        ),
+      );
 
   Widget _buildForm() {
     return Container(
@@ -680,6 +751,8 @@ class _FinanceRequisitionScreenState
   }
 
   Widget _buildRow(FinanceRequisitionView r) {
+    final me = ref.read(authControllerProvider).user;
+    final someoneElse = me != null && r.employeeId != me.employeeId;
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
@@ -699,9 +772,22 @@ class _FinanceRequisitionScreenState
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'UGX ${_money(r.total)}',
+                      'UGX ${_money(r.approvedAmount ?? r.total)}',
                       style: const TextStyle(fontWeight: FontWeight.w700, color: Brand.ink),
                     ),
+                    if (r.isReduced)
+                      Text(
+                        'Reduced from ${_money(r.total)}',
+                        style: const TextStyle(color: Brand.slate, fontSize: 11),
+                      ),
+                    if (someoneElse)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          '${r.fullName} · ${r.department}',
+                          style: const TextStyle(color: Brand.ink, fontSize: 12, fontWeight: FontWeight.w500),
+                        ),
+                      ),
                     const SizedBox(height: 3),
                     Text(
                       r.itemSummary,
@@ -725,6 +811,11 @@ class _FinanceRequisitionScreenState
                   ],
                 ),
               ),
+              if (r.canDecide != null)
+                const Padding(
+                  padding: EdgeInsets.only(right: 6),
+                  child: Text('Review', style: TextStyle(color: Brand.orange, fontWeight: FontWeight.w700, fontSize: 12)),
+                ),
               _StatusChip(status: r.status),
             ],
           ),
@@ -748,6 +839,206 @@ class _RequisitionDetail extends ConsumerStatefulWidget {
 class _RequisitionDetailState extends ConsumerState<_RequisitionDetail> {
   late FinanceRequisitionView r = widget.requisition;
   bool _busy = false;
+
+  // Decision panel. Only the Finance stage can approve a reduced amount.
+  final _note = TextEditingController();
+  late final _amount = TextEditingController(
+    text: widget.requisition.total % 1 == 0
+        ? _money(widget.requisition.total)
+        : widget.requisition.total.toStringAsFixed(2),
+  );
+  final _reason = TextEditingController();
+  String? _decisionError;
+  String? _deciding; // 'approved' | 'rejected' while a decision is saving
+
+  @override
+  void dispose() {
+    _note.dispose();
+    _amount.dispose();
+    _reason.dispose();
+    super.dispose();
+  }
+
+  bool get _financeStage => r.canDecide == 'decision';
+  double get _approving => _amount.text.trim().isEmpty ? r.total : (_num(_amount.text) ?? -1);
+  double get _cut => _financeStage ? r.total - _approving : 0;
+
+  String? get _amountProblem {
+    if (!_financeStage) return null;
+    final a = _approving;
+    if (a <= 0) return 'Enter an amount above zero — or decline it.';
+    if (a > r.total) return "Can't be more than the UGX ${_money(r.total)} requested.";
+    return null;
+  }
+
+  Future<void> _decide(String decision) async {
+    final approving = decision == 'approved';
+    if (approving && _amountProblem != null) {
+      setState(() => _decisionError = _amountProblem);
+      return;
+    }
+    if (approving && _cut > 0 && _reason.text.trim().isEmpty) {
+      setState(() => _decisionError = 'Say why the amount was reduced — the requester and their HOD see it.');
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    final nav = Navigator.of(context);
+    if (!approving) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (d) => AlertDialog(
+          title: Text('Decline ${r.reference}?'),
+          content: Text(
+            _note.text.trim().isEmpty
+                ? 'The requester will be told. Consider adding remarks so they know why.'
+                : 'The requester will be told, with your remarks.',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancel')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Brand.red),
+              onPressed: () => Navigator.pop(d, true),
+              child: const Text('Decline'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+    }
+    setState(() {
+      _deciding = decision;
+      _decisionError = null;
+    });
+    try {
+      final out = await ref.read(dioProvider).patch(
+        '/api/requisitions/finance/${r.id}/${r.canDecide}',
+        data: {
+          'decision': decision,
+          'note': _note.text.trim(),
+          if (_financeStage && approving) 'approved_amount': _approving,
+          if (_financeStage && approving && _cut > 0) 'reduction_reason': _reason.text.trim(),
+        },
+      );
+      final updated = FinanceRequisitionView.fromJson(Map<String, dynamic>.from(out.data));
+      await widget.onChanged();
+      nav.pop();
+      messenger.showSnackBar(SnackBar(
+        content: Text(switch ((decision, updated.status)) {
+          ('rejected', _) => '${r.reference} declined.',
+          (_, 'pending_finance') => '${r.reference} approved — sent to Finance.',
+          _ when updated.isReduced =>
+            '${r.reference} approved at UGX ${_money(updated.approvedAmount!)}.',
+          _ => '${r.reference} approved.',
+        }),
+      ));
+    } catch (e) {
+      if (mounted) {
+        setState(() => _decisionError = _dioMessage(e, 'That decision wasn\'t saved.'));
+      }
+    } finally {
+      if (mounted) setState(() => _deciding = null);
+    }
+  }
+
+  Widget _decisionPanel() {
+    final problem = _amountProblem;
+    final cut = _cut;
+    return Container(
+      margin: const EdgeInsets.only(top: 18),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Brand.canvas,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Brand.line),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            _financeStage ? 'Your decision (Finance)' : 'Your decision (HOD)',
+            style: const TextStyle(fontWeight: FontWeight.w700, color: Brand.ink),
+          ),
+          const SizedBox(height: 10),
+          if (_financeStage) ...[
+            TextField(
+              controller: _amount,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              onChanged: (_) => setState(() => _decisionError = null),
+              decoration: InputDecoration(
+                labelText: 'Amount to approve',
+                prefixText: 'UGX ',
+                filled: true,
+                fillColor: Colors.white,
+                errorText: problem,
+                helperText: problem != null
+                    ? null
+                    : cut > 0
+                        ? 'Reduced by UGX ${_money(cut)} from ${_money(r.total)} requested'
+                        : 'The full amount requested. Lower it to approve less.',
+              ),
+            ),
+            if (cut > 0 && problem == null) ...[
+              const SizedBox(height: 10),
+              TextField(
+                controller: _reason,
+                minLines: 2,
+                maxLines: 4,
+                onChanged: (_) => setState(() => _decisionError = null),
+                decoration: const InputDecoration(
+                  labelText: 'Reason for the reduction (required)',
+                  hintText: 'e.g. Budget allows only 3 tyres this quarter',
+                  filled: true,
+                  fillColor: Colors.white,
+                ),
+              ),
+            ],
+            const SizedBox(height: 10),
+          ],
+          TextField(
+            controller: _note,
+            minLines: 1,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              labelText: 'Remarks (optional — the requester sees this)',
+              filled: true,
+              fillColor: Colors.white,
+            ),
+          ),
+          if (_decisionError != null) ...[
+            const SizedBox(height: 8),
+            Text(_decisionError!, style: const TextStyle(color: Brand.red)),
+          ],
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _deciding != null ? null : () => _decide('rejected'),
+                  style: OutlinedButton.styleFrom(foregroundColor: Brand.red),
+                  icon: const Icon(Icons.close, size: 18),
+                  label: Text(_deciding == 'rejected' ? 'Declining…' : 'Decline'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: _deciding != null ? null : () => _decide('approved'),
+                  icon: const Icon(Icons.check, size: 18),
+                  label: Text(
+                    _deciding == 'approved'
+                        ? 'Approving…'
+                        : cut > 0 && problem == null
+                            ? 'Approve ${_money(_approving)}'
+                            : 'Approve',
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 
   bool get _canEditDocs {
     final me = ref.read(authControllerProvider).user;
@@ -819,7 +1110,8 @@ class _RequisitionDetailState extends ConsumerState<_RequisitionDetail> {
       maxChildSize: 0.95,
       builder: (context, scroll) => ListView(
         controller: scroll,
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+        // Lift the decision fields above the keyboard.
+        padding: EdgeInsets.fromLTRB(20, 12, 20, 28 + MediaQuery.viewInsetsOf(context).bottom),
         children: [
           Center(
             child: Container(
@@ -842,6 +1134,7 @@ class _RequisitionDetailState extends ConsumerState<_RequisitionDetail> {
           ),
           if (created != null)
             Text(
+              '${r.fullName.isEmpty ? '' : '${r.fullName} · ${r.department} · '}'
               'Submitted ${created.day}/${created.month}/${created.year}',
               style: const TextStyle(color: Brand.slate, fontSize: 12),
             ),
@@ -873,9 +1166,35 @@ class _RequisitionDetailState extends ConsumerState<_RequisitionDetail> {
               padding: const EdgeInsets.only(top: 2),
               child: Text(r.amountInWords, style: const TextStyle(color: Brand.slate, fontSize: 12)),
             ),
+          if (r.isReduced)
+            Container(
+              margin: const EdgeInsets.only(top: 12),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF7E6),
+                border: Border.all(color: const Color(0xFFF5C26B)),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Finance approved UGX ${_money(r.approvedAmount!)}',
+                    style: const TextStyle(fontWeight: FontWeight.w700, color: Brand.ink),
+                  ),
+                  Text(
+                    'of UGX ${_money(r.total)} requested (−${_money(r.total - r.approvedAmount!)})',
+                    style: const TextStyle(color: Brand.slate, fontSize: 12),
+                  ),
+                  const SizedBox(height: 6),
+                  Text('Reason: ${r.reductionReason}', style: const TextStyle(color: Brand.ink)),
+                ],
+              ),
+            ),
           const SizedBox(height: 18),
-          _stage('Head of Department', r.hodDecision, r.hodNote),
-          _stage('Finance', r.financeDecision, r.financeNote),
+          _stage('Head of Department', r.hodDecision, r.hodNote, r.hodByName),
+          _stage('Finance', r.financeDecision, r.financeNote, r.financeByName),
+          if (r.canDecide != null) _decisionPanel(),
           const SizedBox(height: 14),
           Row(
             children: [
@@ -921,12 +1240,20 @@ class _RequisitionDetailState extends ConsumerState<_RequisitionDetail> {
               r.attachments.isEmpty ? 'Open form (PDF)' : 'Open form with documents (PDF)',
             ),
           ),
+          const SizedBox(height: 8),
+          Builder(
+            builder: (btn) => OutlinedButton.icon(
+              onPressed: () => _shareRequisition(btn, dio, r),
+              icon: const Icon(Icons.share_outlined),
+              label: const Text('Share'),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _stage(String who, String decision, String note) {
+  Widget _stage(String who, String decision, String note, String by) {
     final (icon, color, label) = switch (decision) {
       'approved' => (Icons.check_circle, Brand.green, 'Approved'),
       'rejected' => (Icons.cancel, Brand.red, 'Declined'),
@@ -944,6 +1271,8 @@ class _RequisitionDetailState extends ConsumerState<_RequisitionDetail> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text('$who · $label', style: const TextStyle(fontWeight: FontWeight.w600)),
+                if (by.isNotEmpty && decision != 'pending')
+                  Text(by, style: const TextStyle(color: Brand.slate, fontSize: 12)),
                 if (note.isNotEmpty)
                   Text('“$note”', style: const TextStyle(color: Brand.slate, fontSize: 12)),
               ],

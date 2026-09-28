@@ -57,17 +57,114 @@ class TeamScreen extends ConsumerWidget {
   }
 }
 
-class _Body extends ConsumerWidget {
+class _Body extends StatefulWidget {
   const _Body({required this.roster});
   final TeamRoster roster;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  State<_Body> createState() => _BodyState();
+}
+
+class _BodyState extends State<_Body> {
+  final _search = TextEditingController();
+  String _query = '';
+
+  /// Department code to narrow to, when the roster spans several (System
+  /// Admin sees everyone). Null = all.
+  String? _dept;
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  bool _matches(TeamMember m) {
+    if (_dept != null && m.department != _dept) return false;
+    if (_query.isEmpty) return true;
+    final q = _query.toLowerCase();
+    return m.fullName.toLowerCase().contains(q) || m.employeeId.toLowerCase().contains(q);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final all = widget.roster;
+    final roster = TeamRoster(
+      date: all.date,
+      scope: _dept ?? all.scope,
+      holiday: all.holiday,
+      pending: all.pending.where(_matches).toList(),
+      present: all.present.where(_matches).toList(),
+      excused: all.excused.where(_matches).toList(),
+      fromCache: all.fromCache,
+    );
+    final departments = {
+      for (final m in [...all.pending, ...all.present, ...all.excused])
+        if (m.department.isNotEmpty) m.department,
+    }.toList()
+      ..sort();
+    final filtering = _query.isNotEmpty || _dept != null;
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
       children: [
         _Summary(roster: roster),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _search,
+          onChanged: (v) => setState(() => _query = v.trim()),
+          textInputAction: TextInputAction.search,
+          decoration: InputDecoration(
+            hintText: 'Search name or staff ID',
+            prefixIcon: const Icon(Icons.search, size: 20),
+            suffixIcon: _query.isEmpty
+                ? null
+                : IconButton(
+                    icon: const Icon(Icons.close, size: 18),
+                    tooltip: 'Clear',
+                    onPressed: () => setState(() {
+                      _search.clear();
+                      _query = '';
+                    }),
+                  ),
+            filled: true,
+            fillColor: Colors.white,
+            isDense: true,
+          ),
+        ),
+        if (departments.length > 1) ...[
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 36,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: [
+                for (final d in [null, ...departments])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: ChoiceChip(
+                      label: Text(d ?? 'All'),
+                      selected: _dept == d,
+                      onSelected: (_) => setState(() => _dept = d),
+                      selectedColor: Brand.greenWash,
+                      labelStyle: TextStyle(
+                        color: _dept == d ? Brand.green : Brand.slate,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+        if (filtering && roster.total == 0)
+          const Padding(
+            padding: EdgeInsets.only(top: 40),
+            child: Center(
+              child: Text('Nobody matches.', style: TextStyle(color: Brand.slate)),
+            ),
+          ),
         if (roster.fromCache) ...[
           const SizedBox(height: 10),
           const _Banner(
@@ -96,7 +193,7 @@ class _Body extends ConsumerWidget {
           const SizedBox(height: 8),
           ...roster.pending.map((m) => _PendingTile(member: m)),
           const SizedBox(height: 20),
-        ] else ...[
+        ] else if (!filtering) ...[
           const _AllIn(),
           const SizedBox(height: 20),
         ],

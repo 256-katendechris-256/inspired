@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,6 +8,8 @@ import 'package:intl/intl.dart';
 import '../../core/api/api_client.dart';
 import '../../core/brand.dart';
 import '../../core/working_days.dart';
+import '../auth/auth_controller.dart';
+import '../requests/request_kit.dart';
 
 /// A kind of leave this employee may ask for, as configured by HR. The
 /// server has already applied the gender rule (a man never sees maternity
@@ -72,6 +76,19 @@ class LeaveRequestItem {
     required this.status,
     required this.hodBy,
     required this.hrBy,
+    this.employeeId = '',
+    this.fullName = '',
+    this.department = '',
+    this.reason = '',
+    this.tasksDelegatedTo = '',
+    this.hodDecision = 'pending',
+    this.hodByName = '',
+    this.hodNote = '',
+    this.hrDecision = 'pending',
+    this.hrByName = '',
+    this.hrNote = '',
+    this.reportBackOn,
+    this.canDecide,
   });
 
   final int id;
@@ -83,6 +100,24 @@ class LeaveRequestItem {
   final String status;
   final String? hodBy;
   final String? hrBy;
+  final String employeeId;
+  final String fullName;
+  final String department;
+  final String reason;
+  final String tasksDelegatedTo;
+  final String hodDecision;
+  final String hodByName;
+  final String hodNote;
+  final String hrDecision;
+  final String hrByName;
+  final String hrNote;
+  final String? reportBackOn;
+
+  /// What the signed-in user can decide now, per the server:
+  /// 'hod-decision', 'hr-decision' or null.
+  final String? canDecide;
+
+  String get reference => 'LV-${id.toString().padLeft(5, '0')}';
 
   factory LeaveRequestItem.fromJson(Map<String, dynamic> j) =>
       LeaveRequestItem(
@@ -96,6 +131,19 @@ class LeaveRequestItem {
         status: j['status'] as String? ?? 'pending_hod',
         hodBy: j['hod_by'] as String?,
         hrBy: j['hr_by'] as String?,
+        employeeId: j['employee_id'] as String? ?? '',
+        fullName: j['full_name'] as String? ?? '',
+        department: j['department'] as String? ?? '',
+        reason: j['reason'] as String? ?? '',
+        tasksDelegatedTo: j['tasks_delegated_to'] as String? ?? '',
+        hodDecision: j['hod_decision'] as String? ?? 'pending',
+        hodByName: j['hod_by_name'] as String? ?? '',
+        hodNote: j['hod_note'] as String? ?? '',
+        hrDecision: j['hr_decision'] as String? ?? 'pending',
+        hrByName: j['hr_by_name'] as String? ?? '',
+        hrNote: j['hr_note'] as String? ?? '',
+        reportBackOn: j['report_back_on'] as String?,
+        canDecide: j['can_decide'] as String?,
       );
 }
 
@@ -224,7 +272,7 @@ class _LeaveScreenState extends ConsumerState<LeaveScreen> {
     });
     try {
       final dio = ref.read(dioProvider);
-      await dio.post(
+      final res = await dio.post(
         '/api/leave/requests',
         data: {
           'leave_type': _leaveType,
@@ -239,7 +287,18 @@ class _LeaveScreenState extends ConsumerState<LeaveScreen> {
         _end = null;
         _reason.clear();
       });
-      await _load();
+      final sent = LeaveRequestItem.fromJson(Map<String, dynamic>.from(res.data));
+      unawaited(_load());
+      if (mounted) {
+        await showSubmittedSheet(
+          context,
+          title: 'Leave request ${sent.reference} submitted',
+          subtitle: '${sent.leaveTypeName}, ${sent.startDate} → ${sent.endDate} · '
+              '${sent.days} working day${sent.days == 1 ? '' : 's'}. '
+              '${sent.status == 'pending_hr' ? 'Sent to HR.' : 'Sent to your HOD.'}',
+          onShare: (btn) => _share(btn, sent),
+        );
+      }
     } on DioException catch (e) {
       final data = e.response?.data;
       setState(() {
@@ -291,13 +350,37 @@ class _LeaveScreenState extends ConsumerState<LeaveScreen> {
                   ),
                 ),
               )
-            else
-              ..._items.map(_buildRow),
+            else ...[
+              if (_toDecide.isNotEmpty) ...[
+                requestSectionLabel('Needs your decision (${_toDecide.length})', Brand.orange),
+                ..._toDecide.map(_buildRow),
+                if (_others.isNotEmpty) requestSectionLabel('All requests', Brand.slate),
+              ],
+              ..._others.map(_buildRow),
+            ],
           ],
         ),
       ),
     );
   }
+
+  List<LeaveRequestItem> get _toDecide => _items.where((r) => r.canDecide != null).toList();
+  List<LeaveRequestItem> get _others => _items.where((r) => r.canDecide == null).toList();
+
+  Future<void> _share(BuildContext button, LeaveRequestItem r) => shareApiPdf(
+        button,
+        ref.read(dioProvider),
+        url: '/api/leave/requests/${r.id}/pdf',
+        filename: 'leave-${r.reference}.pdf',
+        text: 'Leave request ${r.reference}: ${r.leaveTypeName}, '
+            '${r.startDate} → ${r.endDate} (${r.days} working days)',
+        subject: 'Leave request ${r.reference}',
+      );
+
+  void _openDetail(LeaveRequestItem r) => showRequestSheet(
+        context,
+        _LeaveDetail(item: r, onChanged: _load, onShare: _share),
+      );
 
   Widget _buildForm() {
     return Container(
@@ -414,38 +497,261 @@ class _LeaveScreenState extends ConsumerState<LeaveScreen> {
   }
 
   Widget _buildRow(LeaveRequestItem r) {
+    final me = ref.read(authControllerProvider).user;
+    final someoneElse = me != null && r.employeeId.isNotEmpty && r.employeeId != me.employeeId;
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
         boxShadow: Brand.shadowCard,
       ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  r.leaveTypeName,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    color: Brand.ink,
-                  ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () => _openDetail(r),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      r.leaveTypeName,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: Brand.ink,
+                      ),
+                    ),
+                    if (someoneElse)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          '${r.fullName} · ${r.department}',
+                          style: const TextStyle(color: Brand.ink, fontSize: 12, fontWeight: FontWeight.w500),
+                        ),
+                      ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '${r.startDate} → ${r.endDate} · ${r.days}d',
+                      style: const TextStyle(color: Brand.slate, fontSize: 12.5),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 3),
-                Text(
-                  '${r.startDate} → ${r.endDate} · ${r.days}d',
-                  style: const TextStyle(color: Brand.slate, fontSize: 12.5),
+              ),
+              if (r.canDecide != null)
+                const Padding(
+                  padding: EdgeInsets.only(right: 6),
+                  child: Text('Review', style: TextStyle(color: Brand.orange, fontWeight: FontWeight.w700, fontSize: 12)),
                 ),
-              ],
-            ),
+              _StatusChip(status: r.status),
+            ],
           ),
-          _StatusChip(status: r.status),
-        ],
+        ),
       ),
+    );
+  }
+}
+
+/// One leave request in full, and — for its HOD or HR — the decision.
+class _LeaveDetail extends ConsumerStatefulWidget {
+  const _LeaveDetail({required this.item, required this.onChanged, required this.onShare});
+  final LeaveRequestItem item;
+  final Future<void> Function() onChanged;
+  final Future<void> Function(BuildContext button, LeaveRequestItem r) onShare;
+
+  @override
+  ConsumerState<_LeaveDetail> createState() => _LeaveDetailState();
+}
+
+class _LeaveDetailState extends ConsumerState<_LeaveDetail> {
+  LeaveRequestItem get r => widget.item;
+  late final _cover = TextEditingController(text: widget.item.tasksDelegatedTo);
+  final _entitlement = TextEditingController();
+  final _balance = TextEditingController();
+  DateTime? _reportBack;
+
+  @override
+  void initState() {
+    super.initState();
+    // Default: the first working day after the leave ends (Mon–Sat).
+    final end = DateTime.tryParse(r.endDate);
+    if (end != null) {
+      var d = end.add(const Duration(days: 1));
+      if (d.weekday == DateTime.sunday) d = d.add(const Duration(days: 1));
+      _reportBack = d;
+    }
+  }
+
+  @override
+  void dispose() {
+    _cover.dispose();
+    _entitlement.dispose();
+    _balance.dispose();
+    super.dispose();
+  }
+
+  Future<String?> _decide(String decision, String note) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final nav = Navigator.of(context);
+    final hr = r.canDecide == 'hr-decision';
+    try {
+      await ref.read(dioProvider).patch(
+        '/api/leave/requests/${r.id}/${r.canDecide}',
+        data: {
+          'decision': decision,
+          'note': note,
+          if (!hr && _cover.text.trim().isNotEmpty) 'tasks_delegated_to': _cover.text.trim(),
+          if (hr && decision == 'approved') ...{
+            if (_entitlement.text.trim().isNotEmpty) 'leave_entitlement_days': _entitlement.text.trim(),
+            if (_balance.text.trim().isNotEmpty) 'leave_balance_days': _balance.text.trim(),
+            if (_reportBack != null) 'report_back_on': DateFormat('yyyy-MM-dd').format(_reportBack!),
+          },
+        },
+      );
+      await widget.onChanged();
+      nav.pop();
+      messenger.showSnackBar(SnackBar(
+        content: Text(switch ((decision, hr)) {
+          ('rejected', _) => '${r.reference} declined.',
+          (_, false) => '${r.reference} recommended — sent to HR.',
+          _ => '${r.reference} approved.',
+        }),
+      ));
+      return null;
+    } catch (e) {
+      return apiError(e, 'That decision wasn\'t saved.');
+    }
+  }
+
+  List<Widget> _hrFields() => [
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _entitlement,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Entitlement (days)', filled: true, fillColor: Colors.white),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: TextField(
+                controller: _balance,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Balance (days)', filled: true, fillColor: Colors.white),
+              ),
+            ),
+          ],
+        ),
+        InkWell(
+          onTap: () async {
+            final now = DateTime.now();
+            final picked = await showDatePicker(
+              context: context,
+              initialDate: _reportBack ?? now,
+              firstDate: DateTime(now.year - 1),
+              lastDate: DateTime(now.year + 2),
+            );
+            if (picked != null) setState(() => _reportBack = picked);
+          },
+          child: InputDecorator(
+            decoration: const InputDecoration(
+              labelText: 'Report back on',
+              prefixIcon: Icon(Icons.calendar_today_outlined, size: 18),
+              filled: true,
+              fillColor: Colors.white,
+            ),
+            child: Text(_reportBack == null ? '—' : DateFormat('EEE d MMM yyyy').format(_reportBack!)),
+          ),
+        ),
+      ];
+
+  @override
+  Widget build(BuildContext context) {
+    final dio = ref.read(dioProvider);
+    final hr = r.canDecide == 'hr-decision';
+    return RequestSheet(
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                r.reference,
+                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 18, color: Brand.ink),
+              ),
+            ),
+            _StatusChip(status: r.status),
+          ],
+        ),
+        if (r.fullName.isNotEmpty)
+          Text('${r.fullName} · ${r.department}', style: const TextStyle(color: Brand.slate, fontSize: 12)),
+        const SizedBox(height: 14),
+        Text(r.leaveTypeName, style: const TextStyle(fontWeight: FontWeight.w700, color: Brand.ink)),
+        Text(
+          '${r.startDate} → ${r.endDate} · ${r.days} working day${r.days == 1 ? '' : 's'}',
+          style: const TextStyle(color: Brand.slate),
+        ),
+        if (r.reason.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text('Reason: ${r.reason}', style: const TextStyle(color: Brand.ink)),
+          ),
+        if (r.tasksDelegatedTo.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text('Covering: ${r.tasksDelegatedTo}', style: const TextStyle(color: Brand.ink)),
+          ),
+        if (r.reportBackOn != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text('Report back on ${r.reportBackOn}', style: const TextStyle(color: Brand.ink)),
+          ),
+        const SizedBox(height: 16),
+        StageLine(
+          who: 'Head of Department',
+          decision: r.hodDecision,
+          note: r.hodNote,
+          by: r.hodByName,
+          approvedLabel: 'Recommended',
+        ),
+        StageLine(who: 'HR', decision: r.hrDecision, note: r.hrNote, by: r.hrByName),
+        if (r.canDecide != null)
+          DecisionPanel(
+            title: hr ? 'Your decision (HR)' : 'Your decision (HOD)',
+            what: r.reference,
+            approveLabel: hr ? 'Approve' : 'Recommend',
+            fields: hr
+                ? _hrFields()
+                : [
+                    TextField(
+                      controller: _cover,
+                      decoration: const InputDecoration(
+                        labelText: 'Who covers their tasks?',
+                        hintText: 'e.g. Grace (site supervision)',
+                        filled: true,
+                        fillColor: Colors.white,
+                      ),
+                    ),
+                  ],
+            onDecide: _decide,
+          ),
+        const SizedBox(height: 18),
+        FilledButton.icon(
+          onPressed: () => openApiFile(context, dio, '/api/leave/requests/${r.id}/pdf', 'leave-${r.reference}.pdf'),
+          icon: const Icon(Icons.picture_as_pdf_outlined),
+          label: const Text('Open form (PDF)'),
+        ),
+        const SizedBox(height: 8),
+        Builder(
+          builder: (btn) => OutlinedButton.icon(
+            onPressed: () => widget.onShare(btn, r),
+            icon: const Icon(Icons.share_outlined),
+            label: const Text('Share'),
+          ),
+        ),
+      ],
     );
   }
 }

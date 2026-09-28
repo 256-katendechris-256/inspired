@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:inspired/core/api/api_client.dart';
 import 'package:inspired/features/auth/auth_controller.dart';
@@ -126,5 +127,14 @@ void main() {
     );
     await auth.login(email: 'jane@example.com', employeeId: 'PROD-002', password: 'x');
     expect(prefs.getString('inspired.user.v1'), contains('Jane Achieng'));
+  });
+
+  test('Google sign-in failures say what went wrong', () {
+    String? msg(String m) => AuthController.googleFailure(
+          PlatformException(code: 'sign_in_failed', message: m),
+        );
+    expect(msg('com.google.android.gms.common.api.ApiException: 10: '), contains('error 10'));
+    expect(msg('com.google.android.gms.common.api.ApiException: 12501: '), isNull);
+    expect(msg('com.google.android.gms.common.api.ApiException: 7: '), contains('connection'));
   });
 }
