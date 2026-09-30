@@ -104,7 +104,10 @@ class _BellButton extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final unread = ref.watch(inboxProvider).value?.unread ?? 0;
+    // valueOrNull, not value: on an AsyncError `.value` rethrows, so with no
+    // signal the failed inbox fetch took the whole header (and the home
+    // screen with it) down to a grey error box.
+    final unread = ref.watch(inboxProvider).valueOrNull?.unread ?? 0;
     return Stack(
       alignment: Alignment.center,
       children: [
