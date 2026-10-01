@@ -10,11 +10,29 @@ import 'widgets/today_card.dart';
 
 /// Attendance, top to bottom: this month at a glance (days / hours / average
 /// shift), the on-site card for today, and the month calendar.
-class AttendanceScreen extends ConsumerWidget {
+class AttendanceScreen extends ConsumerStatefulWidget {
   const AttendanceScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<AttendanceScreen> createState() => _AttendanceScreenState();
+}
+
+class _AttendanceScreenState extends ConsumerState<AttendanceScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Months are cached for the life of the app, so leave approved (or a
+    // holiday added) since a month was first opened never showed up — on
+    // the web, where a tab stays open for days, effectively never. Re-read
+    // every month each time the screen is opened; the cached copy stays on
+    // screen until the fresh one arrives.
+    Future.microtask(() {
+      if (mounted) ref.invalidate(monthCalendarProvider);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Brand.canvas,
       appBar: AppBar(
@@ -27,10 +45,9 @@ class AttendanceScreen extends ConsumerWidget {
       body: RefreshIndicator(
         color: Brand.green,
         onRefresh: () async {
-          final thisMonth = monthCalendarProvider(monthKey(DateTime.now()));
           ref.invalidate(todayProvider);
-          ref.invalidate(thisMonth);
-          await ref.read(thisMonth.future);
+          ref.invalidate(monthCalendarProvider); // every month, not just this one
+          await ref.read(monthCalendarProvider(monthKey(DateTime.now())).future);
         },
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),

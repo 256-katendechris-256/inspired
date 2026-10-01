@@ -13,7 +13,8 @@ class AttendanceStats extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final month = ref.watch(monthCalendarProvider(monthKey(DateTime.now())));
-    final data = month.asData?.value;
+    // valueOrNull keeps the last figures through a failed refresh.
+    final data = month.valueOrNull;
     final loading = month.isLoading && data == null;
 
     String hrs(double h) =>

@@ -221,12 +221,22 @@ class _LeaveScreenState extends ConsumerState<LeaveScreen> {
     }
   }
 
+  /// The server's rule: leave starts today or later, except sick leave,
+  /// which may start up to a week back (it's filed on return).
+  DateTime get _earliestStart {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    return _leaveType == 'sick' ? today.subtract(const Duration(days: 7)) : today;
+  }
+
   Future<void> _pickDate({required bool isStart}) async {
     final now = DateTime.now();
+    final first = isStart ? _earliestStart : (_start ?? _earliestStart);
+    final current = (isStart ? _start : _end) ?? now;
     final picked = await showDatePicker(
       context: context,
-      initialDate: (isStart ? _start : _end) ?? now,
-      firstDate: DateTime(now.year - 1),
+      initialDate: current.isBefore(first) ? first : current,
+      firstDate: first,
       lastDate: DateTime(now.year + 2),
     );
     if (picked == null) return;
@@ -420,8 +430,14 @@ class _LeaveScreenState extends ConsumerState<LeaveScreen> {
                         ),
                       )
                       .toList(),
-                  onChanged: (v) =>
-                      setState(() => _leaveType = v ?? _leaveType),
+                  onChanged: (v) => setState(() {
+                    _leaveType = v ?? _leaveType;
+                    // A backdated sick-leave start isn't allowed for other types.
+                    if (_start != null && _start!.isBefore(_earliestStart)) {
+                      _start = null;
+                      _end = null;
+                    }
+                  }),
                 ),
               ),
               const SizedBox(width: 12),

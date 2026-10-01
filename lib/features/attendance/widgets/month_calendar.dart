@@ -172,6 +172,8 @@ class _MonthCalendarCardState extends ConsumerState<MonthCalendarCard> {
           ),
           const SizedBox(height: 12),
           data.when(
+            // A failed refresh (no signal) keeps showing the month already loaded.
+            skipError: true,
             loading: () => const Padding(
               padding: EdgeInsets.symmetric(vertical: 48),
               child: Center(child: CircularProgressIndicator(strokeWidth: 2.5)),
